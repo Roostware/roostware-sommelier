@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "title": "Sommelier",
+        "width": 1440,
+        "height": 900,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 24, "y": 36 }
+      }
+    ]
+  }
+}
