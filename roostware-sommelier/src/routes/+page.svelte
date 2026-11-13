@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { openProblem } from "$lib/solve.svelte";
 
   // TODO: replace with the signed-in user's name once it's available.
   const userName = "EulerNumber";
@@ -133,10 +134,6 @@
       day: "numeric",
       year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
     });
-  }
-
-  function openProblem(id: number) {
-    // TODO: open the problem once the Solve page and problem data exist.
   }
 
   // Activity levels 0 (none) to 4 (most), lightest to brightest.
@@ -558,21 +555,8 @@
 </div>
 
 <style>
-  /*
-   * Everything on this page is sized in multiples of --u, which is 1px at the
-   * default window size (1440x900) and grows with the window, up to 1.625px.
-   * The smaller of the width- and height-based scales is used so the content
-   * never outgrows the cards when the window is wide but short (or vice versa).
-   */
+  /* Everything on this page is sized in multiples of --u (see +layout.svelte). */
   .home {
-    --u: calc(
-      clamp(
-          16px,
-          min(calc(16px + (100vw - 1440px) * 0.01), calc(16px + (100vh - 900px) * 0.02)),
-          26px
-        ) / 16
-    );
-
     display: flex;
     flex-direction: column;
     height: 100%;

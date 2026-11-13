@@ -9,13 +9,18 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "catalog": "node scripts/build-catalog.mjs",
+    "catalog:ensure": "node scripts/build-catalog.mjs --if-missing",
+    "test:rust": "npm run catalog:ensure && cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "license": "MIT",
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "dompurify": "^3.4.17",
+    "monaco-editor": "^0.57.0"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",
@@ -26,5 +31,8 @@
     "svelte-check": "^4.0.0",
     "typescript": "~5.6.2",
     "vite": "^6.0.3"
+  },
+  "overrides": {
+    "dompurify": "$dompurify"
   }
 }

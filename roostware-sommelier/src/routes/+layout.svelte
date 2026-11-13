@@ -298,6 +298,20 @@
   }
 
   .dashboard {
+    /*
+     * Page content is sized in multiples of --u, which is 1px at the default window
+     * size (1440x900) and grows with the window, up to 1.625px. The smaller of the
+     * width- and height-based scales is used so content never outgrows its cards
+     * when the window is wide but short (or vice versa).
+     */
+    --u: calc(
+      clamp(
+          16px,
+          min(calc(16px + (100vw - 1440px) * 0.01), calc(16px + (100vh - 900px) * 0.02)),
+          26px
+        ) / 16
+    );
+
     position: absolute;
     top: var(--strip);
     left: var(--strip);

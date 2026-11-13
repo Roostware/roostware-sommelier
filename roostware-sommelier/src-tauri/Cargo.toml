@@ -22,4 +22,21 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+uuid = { version = "1.29.2", features = ["v7"] }
+thiserror = "2.0.21"
+# Talks to LeetCode's (unofficial) run/submit API. native-tls = the OS TLS stack (Schannel on Windows).
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json", "gzip"] }
+tokio = { version = "1", features = ["time"] }
+# Keeps the LeetCode login in the OS credential store rather than in a file (Windows and macOS
+# only: without a platform backend keyring would silently fall back to a throwaway mock store).
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+tempfile = "3.27.0"
 
