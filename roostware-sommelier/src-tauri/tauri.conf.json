@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "roostware-sommelier",
+  "productName": "Sommelier",
   "version": "0.1.0",
   "identifier": "dev.roostware.roostware-sommelier",
   "build": {
