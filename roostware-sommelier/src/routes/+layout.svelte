@@ -1,13 +1,29 @@
 <script lang="ts">
   import { page } from "$app/state";
+  import { onMount } from "svelte";
+  import SettingsMenu from "$lib/SettingsMenu.svelte";
   import TitleBar from "$lib/TitleBar.svelte";
   import { isMac } from "$lib/platform";
+  import { coachSetup } from "$lib/coachSetup.svelte";
+  import { loadSettings } from "$lib/settings.svelte";
   import "@fontsource/ibm-plex-sans/latin-400.css";
   import "@fontsource/ibm-plex-sans/latin-500.css";
   import "@fontsource/ibm-plex-sans/latin-600.css";
   import "@fontsource/ibm-plex-sans/latin-700.css";
+  import "@fontsource/cascadia-code/latin-400.css";
+  import "@fontsource/cascadia-code/latin-400-italic.css"; // comments in the editor
+  import "@fontsource/cascadia-code/latin-700.css";
 
   let { children } = $props();
+
+  // The icons' gradient is animated in the SVG itself, which CSS can't switch off.
+  let aiDefs: SVGSVGElement | undefined = $state();
+
+  onMount(() => {
+    void loadSettings();
+    void coachSetup.refresh();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) aiDefs?.pauseAnimations();
+  });
 
   const navItems = [
     {
@@ -25,11 +41,8 @@
       label: "Solve",
       icon: `<path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/>`,
     },
-    {
-      href: "/learn",
-      label: "Learn",
-      icon: `<path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>`,
-    },
+    // (There was a "Learn" tab after Solve, at /learn, that only held a placeholder page. It was
+    // taken out for now; it's in the first commit if it comes back: `git show 12fe3bc:./src/routes/learn/+page.svelte`.)
   ];
 
   function isActive(href: string) {
@@ -39,6 +52,20 @@
 
   let activeIndex = $derived(navItems.findIndex((item) => isActive(item.href)));
 </script>
+
+<!-- The AI gradient, for icons to stroke with (`stroke: url(#ai-gradient)`). Must stay in the page, not display:none. -->
+<svg class="ai-defs" bind:this={aiDefs} width="0" height="0" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- "reflect" plus a slide of exactly two gradient lengths loops without a seam: the colours drift
+         slowly through the icons, in step with the CSS gradients (same 28s as --ai-drift). -->
+    <linearGradient id="ai-gradient" x1="0" y1="0" x2="1" y2="1" spreadMethod="reflect">
+      <stop offset="0" style="stop-color: var(--ai-1)" />
+      <stop offset="0.5" style="stop-color: var(--ai-2)" />
+      <stop offset="1" style="stop-color: var(--ai-3)" />
+      <animateTransform attributeName="gradientTransform" type="translate" from="0 0" to="2 2" dur="28s" repeatCount="indefinite" />
+    </linearGradient>
+  </defs>
+</svg>
 
 <main>
   <TitleBar />
@@ -70,6 +97,8 @@
     {/each}
   </nav>
 
+  <SettingsMenu />
+
   <section class="dashboard">
     {@render children()}
   </section>
@@ -82,6 +111,74 @@
     --card-border: rgba(255, 255, 255, 0.06);
     --card-radius: 14px;
     --card-shadow: 4px 4px 16px rgba(0, 0, 0, 0.4);
+  }
+
+  /* AI features (the coach, its buttons, the editor underlines) share one look: a "pearl" gradient
+     of steel, pearl and sand, so it's clear at a glance what comes from the AI. It's nearly
+     colourless on purpose: it sits beside the app's gold accent and its green and red status colours
+     without competing with them, and the slow movement does most of the signalling. `--ai-flow` loops
+     seamlessly (it ends on the colour it starts with), so it can slide forever; it drifts slowly at
+     rest and flows faster while the AI is working. */
+  :global(:root) {
+    --ai-1: #9aa6c0;
+    --ai-2: #ede7dc;
+    --ai-3: #d8b98a;
+    --ai-solid: #b8c0d4; /* one colour for things that can't carry a gradient: text, outlines */
+    --ai-gradient: linear-gradient(90deg, var(--ai-1), var(--ai-2), var(--ai-3));
+    --ai-flow: linear-gradient(90deg, var(--ai-1), var(--ai-2), var(--ai-3), var(--ai-2), var(--ai-1));
+    --ai-flow-v: linear-gradient(180deg, var(--ai-1), var(--ai-2), var(--ai-3), var(--ai-2), var(--ai-1));
+    /* How long the colours take to drift once round when the AI is idle. While it's working they
+       flow several times faster (a few seconds), so the two states still look different. */
+    --ai-drift: 28s;
+    --ai-tint: rgba(184, 192, 212, 0.08);
+    --ai-tint-strong: rgba(184, 192, 212, 0.16);
+    --ai-border: rgba(184, 192, 212, 0.32);
+    --ai-border-strong: rgba(184, 192, 212, 0.58);
+  }
+
+  /* Slides a `--ai-flow` background (sized 200% wide) by exactly one period, so it never jumps.
+     The second is for a border drawn as a second background layer under a solid padding layer. */
+  @keyframes -global-ai-flow {
+    to {
+      background-position-x: 200%;
+    }
+  }
+
+  @keyframes -global-ai-flow-y {
+    to {
+      background-position-y: 200%;
+    }
+  }
+
+  @keyframes -global-ai-flow-border {
+    from {
+      background-position-x: 0, 0;
+    }
+    to {
+      background-position-x: 0, 200%;
+    }
+  }
+
+  :global(.ai-defs) {
+    position: absolute;
+    pointer-events: none;
+  }
+
+  /* Gradient text, for labels. Falls back to the solid colour where background-clip: text isn't supported. */
+  :global(.ai-text) {
+    color: var(--ai-solid);
+    background: var(--ai-flow);
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: ai-flow var(--ai-drift) linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.ai-text) {
+      animation: none;
+    }
   }
 
   /* Slim, dark scrollbars that match the cards. (The ::-webkit-scrollbar pieces
@@ -123,6 +220,11 @@
   :global(select),
   :global(textarea) {
     font-family: inherit;
+  }
+
+  :global(:root) {
+    /* The bundled Cascadia Code, with the system fonts only as a fallback. */
+    --font-code: "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
   }
 
   :global(html),

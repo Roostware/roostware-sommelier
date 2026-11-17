@@ -13,6 +13,10 @@ pub enum Error {
     #[error("{0} not found")]
     NotFound(String),
 
+    /// The caller asked for something that makes no sense (a bad grade, a malformed date, …).
+    #[error("{0}")]
+    Invalid(String),
+
     #[error("could not resolve an app path: {0}")]
     Path(String),
 

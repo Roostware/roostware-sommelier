@@ -2,7 +2,7 @@
 // problem. Like the open problem (solve.svelte.ts), this is module state: it survives switching
 // tabs but not restarting the app. (Submissions themselves are stored by the backend.)
 
-import { listSubmissions, type ProblemDetail, type Submission } from "$lib/db";
+import { listSubmissions, setReviewGrade, type ProblemDetail, type Submission } from "$lib/db";
 import {
   LeetCodeError,
   leetcodeStatus,
@@ -44,6 +44,8 @@ export interface JudgeState {
   historyError: string | null;
   open: boolean;
   tab: JudgeTab;
+  /** True from an Accepted submission arriving until its celebration has played. */
+  celebrating: boolean;
 }
 
 const fresh = (): JudgeState => ({
@@ -55,6 +57,7 @@ const fresh = (): JudgeState => ({
   historyError: null,
   open: false,
   tab: "testcase",
+  celebrating: false,
 });
 
 const asError = (e: unknown) => (e instanceof LeetCodeError ? e : new LeetCodeError("other", e instanceof Error ? e.message : String(e)));
@@ -205,6 +208,25 @@ class LeetCodeSession {
     return true;
   }
 
+  /**
+   * Sets how the problem just submitted went (1 Again to 4 Easy), replacing the grade the app
+   * guessed. It decides when the problem comes back for review. Rejects if saving fails.
+   */
+  async setGrade(problemId: number, grade: number) {
+    const s = this.#mutable(problemId);
+    const submission = s.outcome?.kind === "submit" ? s.outcome.submission : null;
+    if (!submission?.reviewId) return;
+    await setReviewGrade(submission.reviewId, grade);
+    submission.reviewGrade = grade;
+    const inHistory = s.history?.find((h) => h.id === submission.id);
+    if (inHistory) inHistory.reviewGrade = grade;
+  }
+
+  /** The celebration for an accepted submission has played. */
+  endCelebration(problemId: number) {
+    this.#mutable(problemId).celebrating = false;
+  }
+
   async loadHistory(problemId: number) {
     const s = this.#mutable(problemId);
     try {
@@ -258,6 +280,7 @@ class LeetCodeSession {
       await solve.flush();
       const submission = await submitCode(problemId, lang, code());
       s.outcome = { kind: "submit", submission };
+      if (submission.status === "Accepted") s.celebrating = true;
       void this.loadHistory(problemId);
       // The problem's progress, draft and "last submitted" code all just changed.
       if (solve.problemId === problemId) void solve.refresh();

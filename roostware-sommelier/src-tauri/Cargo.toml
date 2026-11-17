@@ -27,7 +27,9 @@ uuid = { version = "1.29.2", features = ["v7"] }
 thiserror = "2.0.21"
 # Talks to LeetCode's (unofficial) run/submit API. native-tls = the OS TLS stack (Schannel on Windows).
 reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json", "gzip"] }
-tokio = { version = "1", features = ["time"] }
+# The AI coach streams replies and lets the Stop button cancel one (sync, macros), and its tests
+# run async code (rt).
+tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }
 # Keeps the LeetCode login in the OS credential store rather than in a file (Windows and macOS
 # only: without a platform backend keyring would silently fall back to a throwaway mock store).
 [target.'cfg(windows)'.dependencies]

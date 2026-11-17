@@ -3,6 +3,7 @@
   // and the hint button. The topic tags are a hint the user asks for, so they aren't shown
   // until then.
   import { tick } from "svelte";
+  import CollectionPicker from "$lib/CollectionPicker.svelte";
   import type { Progress, ProblemDetail } from "$lib/db";
   import { difficultyColor } from "$lib/difficulty";
   import { openExternal } from "$lib/external";
@@ -80,38 +81,46 @@
       {/if}
       <span class="badge" class:solved={problem.progress === "solved"}>{progressLabels[problem.progress]}</span>
 
-      <!-- Greyed out and disabled when there's nothing to reveal (no hints, or all shown). -->
-      <span class="tip hint-tip" data-tip={hintTip}>
-        <button
-          type="button"
-          class="hint-btn"
-          disabled={!canReveal}
-          aria-label={steps.length === 0
-            ? "No hints available for this problem"
-            : canReveal
-              ? `Show hint ${shown + 1} of ${steps.length}`
-              : "All hints shown"}
-          onclick={revealHint}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
+      <div class="actions">
+        <CollectionPicker
+          problemId={problem.id}
+          collectionIds={problem.collectionIds}
+          onchange={() => solve.refresh()}
+        />
+
+        <!-- Greyed out and disabled when there's nothing to reveal (no hints, or all shown). -->
+        <span class="tip hint-tip" data-tip={hintTip}>
+          <button
+            type="button"
+            class="hint-btn"
+            disabled={!canReveal}
+            aria-label={steps.length === 0
+              ? "No hints available for this problem"
+              : canReveal
+                ? `Show hint ${shown + 1} of ${steps.length}`
+                : "All hints shown"}
+            onclick={revealHint}
           >
-            <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
-            <path d="M9 18h6" />
-            <path d="M10 22h4" />
-          </svg>
-          <span>{hintLabel}</span>
-          {#if steps.length > 0}
-            <span class="hint-count" aria-hidden="true">{shown}/{steps.length}</span>
-          {/if}
-        </button>
-      </span>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+              <path d="M9 18h6" />
+              <path d="M10 22h4" />
+            </svg>
+            <span>{hintLabel}</span>
+            {#if steps.length > 0}
+              <span class="hint-count" aria-hidden="true">{shown}/{steps.length}</span>
+            {/if}
+          </button>
+        </span>
+      </div>
     </div>
     <dl class="facts">
       <div>
@@ -236,10 +245,14 @@
     background-color: var(--c);
   }
 
-  /* ---- Hint button ---- */
-  .hint-tip {
+  /* The collections and hint buttons, pushed to the right edge of the badges row. */
+  .actions {
+    display: flex;
+    gap: calc(8 * var(--u));
     margin-left: auto;
   }
+
+  /* ---- Hint button ---- */
 
   .hint-btn {
     display: inline-flex;
@@ -498,7 +511,7 @@
     padding: 1px calc(6 * var(--u));
     border-radius: calc(5 * var(--u));
     background-color: rgba(255, 255, 255, 0.08);
-    font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+    font-family: var(--font-code);
     font-size: 0.9em;
     color: #edeae3;
   }
@@ -510,7 +523,7 @@
     border-left: calc(3 * var(--u)) solid rgba(255, 255, 255, 0.18);
     border-radius: calc(4 * var(--u));
     background-color: #1d2027;
-    font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+    font-family: var(--font-code);
     font-size: calc(13 * var(--u));
     line-height: 1.6;
     white-space: pre-wrap;

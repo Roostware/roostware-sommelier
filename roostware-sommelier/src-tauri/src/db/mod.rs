@@ -9,14 +9,22 @@
 //! `Db` is managed Tauri state; commands reach the connection through [`Db::with`].
 
 mod error;
+pub mod coach;
 pub mod collections;
+pub mod default_collections;
 pub mod drafts;
+pub mod give_ups;
 pub mod migrations;
 pub mod problems;
+pub mod rating;
+pub mod recommendations;
+pub mod reset;
+pub mod reviews;
+pub mod settings;
 pub mod submissions;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use std::{
     fs,
@@ -44,7 +52,13 @@ impl Db {
     pub fn open(app: &AppHandle) -> Result<Self> {
         let data_dir = app.path().app_data_dir().map_err(|e| Error::Path(e.to_string()))?;
         fs::create_dir_all(&data_dir)?;
-        Self::open_at(&data_dir.join("user.db"), &catalog_path(app)?)
+        let db = Self::open_at(&data_dir.join("user.db"), &catalog_path(app)?)?;
+        // Only the real app makes the built-in collections (`open_at` is what tests use, and they
+        // start with none). Not worth refusing to start over: it is retried at the next launch.
+        if let Err(e) = db.with(|conn| default_collections::seed(conn)) {
+            eprintln!("Couldn't set up the built-in collections: {e}");
+        }
+        Ok(db)
     }
 
     pub fn open_at(user_db: &Path, catalog: &Path) -> Result<Self> {
@@ -198,7 +212,10 @@ mod tests {
         let db = open(&dir);
         db.with(|c| {
             assert_eq!(migrations::current_version(c)?, migrations::ALL.len() as i64);
-            for table in ["collections", "collection_problems", "problem_state", "drafts", "submissions"] {
+            for table in [
+                "collections", "collection_problems", "problem_state", "drafts", "submissions", "reviews",
+                "settings", "daily_sets", "daily_set_items", "give_ups", "coach_threads", "coach_messages",
+            ] {
                 let n: i64 = c.query_row(
                     "SELECT COUNT(*) FROM main.sqlite_master WHERE type = 'table' AND name = ?1",
                     [table],

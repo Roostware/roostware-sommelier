@@ -2,12 +2,16 @@
   // The Solve tab while a problem is open, laid out like LeetCode: the problem on the left
   // half and a code editor on the right half.
   import { onMount, tick } from "svelte";
+  import { coach } from "$lib/coach.svelte";
+  import { COACH_NAME } from "$lib/coachName";
+  import CoachPanel from "$lib/CoachPanel.svelte";
   import CodeEditor from "$lib/CodeEditor.svelte";
   import Dropdown from "$lib/Dropdown.svelte";
   import JudgePanel from "$lib/JudgePanel.svelte";
   import { defaultLanguage, languageIcon, languageLabel, monacoLanguage, sortLanguages } from "$lib/languages";
   import { leetcode } from "$lib/leetcode.svelte";
   import ProblemStatement from "$lib/ProblemStatement.svelte";
+  import { settings } from "$lib/settings.svelte";
   import { closeProblem, solve } from "$lib/solve.svelte";
 
   onMount(() => {
@@ -43,6 +47,23 @@
     current = solve.codeFor(problem.id, lang) ?? starter;
   });
   let changed = $derived(current !== starter);
+
+  // ---- The AI coach ----------------------------------------------------------
+  // A third column on the right, closed until the user opens it (and absent if they've turned the
+  // coach off in the settings). What it offers depends on the problem's submissions and whether
+  // the user has given up, so those are loaded as soon as the problem is open, drawer or not:
+  // the Give up button in the editor's bar needs them too.
+  let showCoach = $derived(settings.coachEnabled && coach.open);
+
+  $effect(() => {
+    if (!problem) return;
+    const id = problem.id;
+    if (leetcode.stateFor(id).history === null) void leetcode.loadHistory(id);
+    // A new submission can settle a give-up (solving it again), so read it again when one lands.
+    void leetcode.stateFor(id).history?.[0]?.id;
+    void coach.loadGiveUp(id);
+    void coach.loadSaved(id);
+  });
 
   /** The user's code as it stands: what Run and Submit send. */
   function currentCode(): string {
@@ -122,7 +143,7 @@
   </button>
 
   {#if problem}
-    <div class="panes">
+    <div class="panes" class:with-coach={showCoach}>
       <section class="pane card" aria-label="Problem description">
         <ProblemStatement {problem} />
       </section>
@@ -140,6 +161,25 @@
 
             {#if solve.saveError}
               <span class="save-error" role="alert">Couldn't save your code</span>
+            {/if}
+
+            <div class="tools">
+            {#if settings.coachEnabled}
+              <span class="tip" data-tip={coach.open ? `Close ${COACH_NAME}` : `Open ${COACH_NAME}, your AI coach`}>
+                <button
+                  type="button"
+                  class="coach-btn"
+                  class:working={coach.thread(problem.id).busy}
+                  aria-pressed={coach.open}
+                  aria-label="Ask {COACH_NAME}, your AI coach"
+                  onclick={() => coach.toggle()}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" />
+                  </svg>
+                  Ask {COACH_NAME}
+                </button>
+              </span>
             {/if}
 
             <!-- The reset icon and the yes/no question share this spot, right-aligned, so the
@@ -225,6 +265,7 @@
                 </span>
               </div>
             </div>
+            </div>
           </div>
           <div class="editor-area">
             {#key editorKey}
@@ -240,6 +281,12 @@
           <p class="message">This problem has no starter code to edit.</p>
         {/if}
       </section>
+
+      {#if showCoach && lang}
+        <section class="pane card coach-pane" aria-label="{COACH_NAME}, the AI coach">
+          <CoachPanel {problem} {lang} getCode={currentCode} onclose={() => (coach.open = false)} />
+        </section>
+      {/if}
     </div>
   {:else if solve.error}
     <p class="message" role="alert">Couldn't load this problem: {solve.error}</p>
@@ -311,7 +358,25 @@
     animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
   }
 
+  /* With the AI coach open there's a third column: the problem and the editor share what's left. */
+  .panes.with-coach {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(calc(300 * var(--u)), calc(380 * var(--u)));
+  }
+
+  .coach-pane {
+    animation: coach-in 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  }
+
+  @keyframes coach-in {
+    from {
+      opacity: 0;
+      transform: translateX(calc(16 * var(--u)));
+    }
+  }
+
   .pane {
+    /* The judge panel's celebration is laid over the whole pane. */
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -339,6 +404,74 @@
     font-weight: 500;
     line-height: calc(16 * var(--u));
     color: #ff8a8a;
+  }
+
+  /* The coach button and the reset control, together at the right of the toolbar. */
+  .tools {
+    display: flex;
+    align-items: center;
+    gap: calc(8 * var(--u));
+  }
+
+  .coach-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(6 * var(--u));
+    box-sizing: border-box;
+    height: calc(32 * var(--u));
+    padding: 0 calc(12 * var(--u)) 0 calc(10 * var(--u));
+    border: 1px solid var(--card-border);
+    border-radius: calc(8 * var(--u));
+    background-color: #1d2027;
+    font: inherit;
+    font-size: calc(13 * var(--u));
+    font-weight: 500;
+    color: #c9c2b4;
+    cursor: pointer;
+    transition:
+      border-color 0.2s,
+      background-color 0.15s,
+      color 0.15s;
+  }
+
+  .coach-btn svg {
+    width: calc(14 * var(--u));
+    height: calc(14 * var(--u));
+    stroke: url(#ai-gradient);
+  }
+
+  .coach-btn:hover {
+    border-color: var(--ai-border-strong);
+    color: #edeae3;
+  }
+
+  .coach-btn[aria-pressed="true"] {
+    border-color: var(--ai-border-strong);
+    background-color: var(--ai-tint);
+    color: #edeae3;
+  }
+
+  /* A reply is being written (even with the drawer closed): the border becomes the flowing gradient. */
+  .coach-btn.working {
+    border-color: transparent;
+    background:
+      linear-gradient(#1d2027, #1d2027) padding-box,
+      var(--ai-flow) border-box;
+    background-size:
+      auto,
+      200% 100%;
+    animation: ai-flow-border 4s linear infinite;
+  }
+
+  .coach-btn:focus-visible {
+    outline: 2px solid var(--ai-solid);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .coach-btn.working {
+      animation: none;
+    }
   }
 
   /* ---- Reset: an icon that turns into a yes/no question ---- */
@@ -529,7 +662,8 @@
       height: auto;
     }
 
-    .panes {
+    .panes,
+    .panes.with-coach {
       grid-template-columns: minmax(0, 1fr);
     }
 
@@ -539,7 +673,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .panes {
+    .panes,
+    .coach-pane {
       animation: none;
     }
 

@@ -4,6 +4,7 @@
 //! `db::problems`; this only proves the wiring and the wire format.
 
 use roostware_sommelier_lib::{
+    coach::{keys::MemoryKeys, Coach},
     db::Db,
     leetcode::{
         auth::{CredentialStore, Credentials, MemoryStore, Stored},
@@ -103,6 +104,7 @@ fn harness_against(leetcode_base: &str) -> Harness {
     let app = with_commands(mock_builder())
         .manage(db)
         .manage(leetcode)
+        .manage(Coach::new(Box::new(MemoryKeys::default())))
         .build(mock_context(noop_assets()))
         .unwrap();
     let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
@@ -285,6 +287,41 @@ fn malformed_arguments_are_rejected_not_executed() {
 fn list_collections_over_ipc() {
     let h = harness();
     assert_eq!(invoke(&h, "list_collections", json!({})).unwrap(), json!([]));
+}
+
+#[test]
+fn collections_round_trip_over_ipc() {
+    let h = harness();
+    let made = invoke(&h, "create_collection", json!({ "name": " Warm-ups ", "problemId": 1 })).unwrap();
+    assert_eq!(made["name"], "Warm-ups");
+    assert_eq!(made["problemCount"], 1);
+    let id = made["id"].as_str().unwrap().to_string();
+
+    invoke(&h, "add_problem_to_collection", json!({ "collectionId": id, "problemId": 900 })).unwrap();
+    let ids_of = |problem: i64| invoke(&h, "get_problem", json!({ "id": problem })).unwrap()["collectionIds"].clone();
+    assert_eq!(ids_of(900), json!([id]));
+    assert_eq!(invoke(&h, "list_collections", json!({})).unwrap()[0]["problemCount"], 2);
+
+    invoke(&h, "remove_problem_from_collection", json!({ "collectionId": id, "problemId": 1 })).unwrap();
+    assert_eq!(ids_of(1), json!([]));
+    assert_eq!(invoke(&h, "list_collections", json!({})).unwrap().as_array().unwrap().len(), 1);
+
+    // Removing the last problem deletes the collection.
+    invoke(&h, "remove_problem_from_collection", json!({ "collectionId": id, "problemId": 900 })).unwrap();
+    assert_eq!(invoke(&h, "list_collections", json!({})).unwrap(), json!([]));
+    assert_eq!(ids_of(900), json!([]));
+}
+
+#[test]
+fn bad_collection_requests_report_readable_errors() {
+    let h = harness();
+    let err = invoke(&h, "create_collection", json!({ "name": "  ", "problemId": 1 })).unwrap_err();
+    assert_eq!(err, json!("Give the collection a name."));
+    let err = invoke(&h, "create_collection", json!({ "name": "Ok", "problemId": 424242 })).unwrap_err();
+    assert_eq!(err, json!("problem 424242 not found"));
+    let err = invoke(&h, "add_problem_to_collection", json!({ "collectionId": "nope", "problemId": 1 })).unwrap_err();
+    assert_eq!(err, json!("collection nope not found"));
+    assert_eq!(invoke(&h, "list_collections", json!({})).unwrap(), json!([]), "nothing was created");
 }
 
 #[test]
@@ -486,6 +523,273 @@ fn an_accepted_submission_is_recorded_and_settles_the_draft() {
     let listed = invoke(&h, "list_submissions", json!({ "problemId": 1 })).unwrap();
     assert_eq!(listed.as_array().unwrap().len(), 1);
     assert_eq!(listed[0]["id"], s["id"]);
+
+    // The dashboard's activity graph reads just the times, as plain numbers.
+    assert_eq!(invoke(&h, "list_submission_times", json!({})).unwrap(), json!([s["submittedAt"]]));
+}
+
+#[test]
+fn recommendations_pattern_strengths_and_review_grades_work_over_ipc() {
+    let fake = fake_leetcode(judging(accepted()));
+    let h = harness_against(&fake.base);
+    sign_in(&h);
+
+    // A new user's day: the fixture catalog has two free problems, so that's all there is to pick.
+    let set = invoke(&h, "get_daily_recommendations", json!({ "day": "2026-11-13" })).unwrap();
+    assert_eq!((set["day"].as_str(), set["count"].as_i64()), (Some("2026-11-13"), Some(3)));
+    let items = set["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    for item in items {
+        assert_eq!(item["kind"], "new");
+        assert_eq!(item["done"], false);
+        assert!(item["problemId"].is_i64() && item["frontendId"].is_i64());
+        assert!(item["title"].is_string() && item["titleSlug"].is_string() && item["difficulty"].is_string());
+        assert!(item["reason"].as_str().is_some_and(|r| !r.is_empty()));
+    }
+    assert_eq!(invoke(&h, "get_daily_recommendations", json!({ "day": "2026-11-13" })).unwrap()["items"], set["items"], "it's kept for the day");
+
+    let strengths = invoke(&h, "get_pattern_strengths", json!({})).unwrap();
+    let list = strengths.as_array().unwrap();
+    assert_eq!(list.len(), 17);
+    assert_eq!(list[0]["id"], "arrays-hashing");
+    assert!(list.iter().all(|p| p["value"] == 0 && p["short"].is_string() && p["unlocked"].is_boolean()));
+
+    // Solving a problem logs a review whose grade the user can change.
+    let s = submit(&h, "my code").unwrap();
+    assert_eq!(s["reviewGrade"], 3, "a clean solve is guessed to be Good");
+    let review_id = s["reviewId"].as_str().expect("a review id").to_owned();
+    invoke(&h, "set_review_grade", json!({ "reviewId": review_id, "grade": 4 })).unwrap();
+    assert_eq!(invoke(&h, "list_submissions", json!({ "problemId": 1 })).unwrap()[0]["reviewGrade"], 4);
+
+    // ...and it shows on the dashboard: the problem is done, and Arrays & Hashing has some strength.
+    let after = invoke(&h, "get_daily_recommendations", json!({ "day": "2026-11-13" })).unwrap();
+    let solved = after["items"].as_array().unwrap().iter().find(|i| i["problemId"] == 1).map(|i| i["done"].clone());
+    assert_eq!(solved, Some(json!(true)));
+    let strengths = invoke(&h, "get_pattern_strengths", json!({})).unwrap();
+    assert!(strengths[0]["value"].as_i64().unwrap() > 0 && strengths[0]["solved"] == 1);
+
+    // The rating: 1000 before any solve, then it goes up with the clean solve. Overriding the grade
+    // to Easy above changed nothing about it (only failed attempts count).
+    let rating = invoke(&h, "get_rating", json!({})).unwrap();
+    assert_eq!((rating["rating"].as_i64(), rating["games"].as_i64(), rating["provisional"].as_bool()), (Some(1026), Some(1), Some(true)));
+    assert_eq!(rating["weeklyChange"], 26);
+    let history = rating["history"].as_array().unwrap();
+    assert_eq!(history.iter().map(|p| p["rating"].as_i64().unwrap()).collect::<Vec<_>>(), [1000, 1026]);
+    assert!(history[0]["at"].is_i64());
+
+    // Bad requests say what was wrong.
+    let err = invoke(&h, "set_review_grade", json!({ "reviewId": review_id, "grade": 9 })).unwrap_err();
+    assert_eq!(err, json!("9 is not a grade from 1 to 4"));
+    assert!(invoke(&h, "set_review_grade", json!({ "reviewId": "nope", "grade": 2 })).unwrap_err().as_str().unwrap().contains("not found"));
+    assert!(invoke(&h, "get_daily_recommendations", json!({ "day": "today" })).unwrap_err().as_str().unwrap().contains("not a date"));
+}
+
+#[test]
+fn settings_work_over_ipc() {
+    let fake = fake_leetcode(judging(accepted()));
+    let h = harness_against(&fake.base);
+
+    let coach = json!({ "enabled": true, "provider": "anthropic", "model": "", "baseUrl": "", "priceInput": null, "priceOutput": null });
+    assert_eq!(
+        invoke(&h, "get_settings", json!({})).unwrap(),
+        json!({ "dailyProblemCount": 3, "showCuratedCollections": false, "coach": coach })
+    );
+
+    invoke(&h, "set_daily_problem_count", json!({ "count": 5 })).unwrap();
+    invoke(&h, "set_show_curated_collections", json!({ "show": true })).unwrap();
+    assert_eq!(
+        invoke(&h, "get_settings", json!({})).unwrap(),
+        json!({ "dailyProblemCount": 5, "showCuratedCollections": true, "coach": coach })
+    );
+
+    // The AI coach's own settings.
+    let changed = json!({ "enabled": false, "provider": "other", "model": "llama3", "baseUrl": "http://localhost:11434/v1", "priceInput": 2.5, "priceOutput": null });
+    invoke(&h, "set_coach_settings", json!({ "settings": changed })).unwrap();
+    assert_eq!(invoke(&h, "get_settings", json!({})).unwrap()["coach"], changed);
+    let bad = json!({ "enabled": true, "provider": "skynet", "model": "", "baseUrl": "", "priceInput": null, "priceOutput": null });
+    let err = invoke(&h, "set_coach_settings", json!({ "settings": bad })).unwrap_err();
+    assert!(err.as_str().unwrap().contains("not one of the providers"), "{err}");
+    let bad_url = json!({ "enabled": true, "provider": "other", "model": "m", "baseUrl": "ftp://x", "priceInput": null, "priceOutput": null });
+    assert!(invoke(&h, "set_coach_settings", json!({ "settings": bad_url })).unwrap_err().as_str().unwrap().contains("http"));
+    assert_eq!(invoke(&h, "get_settings", json!({})).unwrap()["coach"]["provider"], "other", "a refused value changes nothing");
+}
+
+#[test]
+fn the_coach_is_not_ready_until_a_key_is_saved_and_the_key_is_never_sent_back() {
+    let h = harness();
+    let status = invoke(&h, "coach_status", json!({})).unwrap();
+    assert_eq!(status["ready"], false);
+    assert_eq!(status["reason"], "Add your Anthropic API key in Settings.");
+    assert_eq!(status["model"], "claude-opus-5-5");
+    assert_eq!(status["keys"], json!({ "anthropic": false, "openai": false, "other": false }));
+
+    invoke(&h, "set_coach_key", json!({ "provider": "anthropic", "key": "  sk-ant-super-secret  " })).unwrap();
+    let status = invoke(&h, "coach_status", json!({})).unwrap();
+    assert_eq!((status["ready"].as_bool(), status["reason"].is_null()), (Some(true), true));
+    assert_eq!(status["keys"]["anthropic"], true);
+    assert!(!status.to_string().contains("secret"), "the key never comes back: {status}");
+
+    // Another provider's key is separate.
+    assert_eq!(invoke(&h, "coach_status", json!({})).unwrap()["keys"]["openai"], false);
+    invoke(&h, "clear_coach_key", json!({ "provider": "anthropic" })).unwrap();
+    invoke(&h, "clear_coach_key", json!({ "provider": "anthropic" })).unwrap();
+    assert_eq!(invoke(&h, "coach_status", json!({})).unwrap()["ready"], false);
+
+    // Bad requests say what was wrong.
+    assert!(invoke(&h, "set_coach_key", json!({ "provider": "skynet", "key": "k" })).unwrap_err()["message"].as_str().unwrap().contains("not one of the providers"));
+    assert!(invoke(&h, "set_coach_key", json!({ "provider": "openai", "key": "   " })).unwrap_err()["message"].as_str().unwrap().contains("empty"));
+    assert!(invoke(&h, "set_coach_key", json!({ "provider": "openai", "key": "a
+b" })).unwrap_err()["message"].as_str().unwrap().contains("doesn't look like"));
+    assert_eq!(invoke(&h, "coach_status", json!({})).unwrap()["keys"]["openai"], false);
+
+    // Turning the coach off, or pointing it at a server with no address, says why it can't answer.
+    invoke(&h, "set_coach_settings", json!({ "settings": { "enabled": false, "provider": "anthropic", "model": "", "baseUrl": "", "priceInput": null, "priceOutput": null } })).unwrap();
+    assert_eq!(invoke(&h, "coach_status", json!({})).unwrap()["reason"], "The AI Coach is turned off in Settings.");
+    invoke(&h, "set_coach_settings", json!({ "settings": { "enabled": true, "provider": "other", "model": "m", "baseUrl": "", "priceInput": null, "priceOutput": null } })).unwrap();
+    assert_eq!(invoke(&h, "coach_status", json!({})).unwrap()["reason"], "Enter your server's address in Settings.");
+
+    // Without a key the connection test says what's missing instead of sending anything.
+    invoke(&h, "set_coach_settings", json!({ "settings": { "enabled": true, "provider": "openai", "model": "m", "baseUrl": "", "priceInput": null, "priceOutput": null } })).unwrap();
+    let err = invoke(&h, "test_coach_connection", json!({})).unwrap_err();
+    assert_eq!((err["kind"].as_str(), err["message"].as_str()), (Some("notReady"), Some("Add your OpenAI API key in Settings.")));
+}
+
+#[test]
+fn the_coach_answers_over_ipc_using_the_saved_settings_and_key() {
+    // A stand-in OpenAI-style server: it streams a hint, unless the key it's sent is the bad one.
+    let fake = fake_leetcode(|r| {
+        if r.path != "/v1/chat/completions" {
+            return (404, "{}".into());
+        }
+        if r.headers.get("authorization").is_some_and(|a| a == "Bearer sk-bad") {
+            return (401, json!({ "error": { "message": "Incorrect API key provided" } }).to_string());
+        }
+        let stream = [
+            json!({ "choices": [{ "delta": { "content": "Think about " } }] }),
+            json!({ "choices": [{ "delta": { "content": "what you've seen." }, "finish_reason": "stop" }] }),
+            json!({ "choices": [], "usage": { "prompt_tokens": 40, "completion_tokens": 6 } }),
+        ]
+        .iter()
+        .map(|e| format!("data: {e}\n\n"))
+        .collect::<String>();
+        (200, format!("{stream}data: [DONE]\n\n"))
+    });
+    let h = harness();
+    let settings = json!({ "enabled": true, "provider": "other", "model": "llama3", "baseUrl": format!("{}/v1", fake.base), "priceInput": null, "priceOutput": null });
+    invoke(&h, "set_coach_settings", json!({ "settings": settings })).unwrap();
+    assert_eq!(invoke(&h, "coach_status", json!({})).unwrap()["ready"], true, "a local server needs no key");
+
+    let request = |level: u8| {
+        json!({
+            "request": {
+                "requestId": format!("r{level}"), "action": "hint", "problemId": 1, "lang": "python3",
+                "code": "def f(): pass", "submission": null, "level": level, "message": null, "turn": 0,
+                "failedAttempts": 0, "solutionAllowed": false,
+                "history": [{ "role": "user", "text": "Give me a hint" }]
+            },
+            "onEvent": "__CHANNEL__:1"
+        })
+    };
+    let reply = invoke(&h, "coach_reply", request(1)).unwrap();
+    assert_eq!(reply["reply"], json!({ "kind": "text", "text": "Think about what you've seen." }));
+    assert_eq!(reply["usage"], json!({ "inputTokens": 40, "outputTokens": 6 }));
+
+    // What the server was sent: the model, the rules, the problem, and the numbered code. No key.
+    let sent = fake.requests("POST", "/v1/chat/completions");
+    assert_eq!(sent.len(), 1);
+    assert!(!sent[0].headers.contains_key("authorization"));
+    let body = &sent[0].body;
+    assert_eq!((body["model"].as_str(), body["stream"].as_bool()), (Some("llama3"), Some(true)));
+    assert!(body["messages"][0]["content"].as_str().unwrap().contains("Never write a complete solution"));
+    let last = body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap();
+    assert!(last.contains("<problem title=\"Two Sum\"") && last.contains("  1 | def f(): pass") && last.contains("Do NOT name the data structure"), "{last}");
+
+    // A saved key goes in the header, and the provider turning it down comes back as an auth error.
+    invoke(&h, "set_coach_key", json!({ "provider": "other", "key": "sk-bad" })).unwrap();
+    let err = invoke(&h, "coach_reply", request(2)).unwrap_err();
+    assert_eq!(err["kind"], "auth", "{err}");
+    assert!(err["message"].as_str().unwrap().contains("Check it in Settings") && !err.to_string().contains("sk-bad"));
+    assert_eq!(fake.requests("POST", "/v1/chat/completions").len(), 2);
+
+    // The connection test goes through the same path.
+    invoke(&h, "set_coach_key", json!({ "provider": "other", "key": "sk-good" })).unwrap();
+    let report = invoke(&h, "test_coach_connection", json!({})).unwrap();
+    assert_eq!(report["model"], "llama3");
+
+    // Requests that make no sense are refused before anything is sent.
+    let mut bad = request(1);
+    bad["request"]["problemId"] = json!(424242);
+    assert!(invoke(&h, "coach_reply", bad).unwrap_err()["message"].as_str().unwrap().contains("not found"));
+    let mut huge = request(1);
+    huge["request"]["code"] = json!("x".repeat(500 * 1024));
+    assert!(invoke(&h, "coach_reply", huge).unwrap_err()["message"].as_str().unwrap().contains("too large"));
+    assert_eq!(fake.requests("POST", "/v1/chat/completions").len(), 3, "only the good key's test went out");
+
+    // And stopping something that isn't running is fine.
+    invoke(&h, "coach_cancel", json!({ "requestId": "nothing" })).unwrap();
+}
+
+#[test]
+fn coach_conversations_are_saved_per_problem_and_survive_a_new_session() {
+    let h = harness();
+    let empty = invoke(&h, "load_coach_thread", json!({ "problemId": 1 })).unwrap();
+    assert!(empty["thread"].is_null());
+    assert_eq!(empty["problemUsage"], json!({ "input": 0, "output": 0 }));
+
+    let user = json!({ "seq": 0, "role": "user", "label": null, "body": { "kind": "text", "text": "Give me a hint" }, "aboutCode": null, "inputTokens": null, "outputTokens": null });
+    let coach = json!({ "seq": 1, "role": "coach", "label": "Hint 1 of 3 · Idea", "body": { "kind": "text", "text": "Think." }, "aboutCode": "def f(): pass", "inputTokens": 900, "outputTokens": 25 });
+    invoke(&h, "save_coach_message", json!({ "problemId": 1, "message": user })).unwrap();
+    invoke(&h, "save_coach_message", json!({ "problemId": 1, "message": coach })).unwrap();
+    invoke(&h, "save_coach_state", json!({ "problemId": 1, "state": { "hintLevel": 1 } })).unwrap();
+
+    let loaded = invoke(&h, "load_coach_thread", json!({ "problemId": 1 })).unwrap();
+    assert_eq!(loaded["thread"]["messages"], json!([user, coach]));
+    assert_eq!(loaded["thread"]["state"], json!({ "hintLevel": 1 }));
+    assert_eq!(loaded["problemUsage"], json!({ "input": 900, "output": 25 }));
+    assert!(invoke(&h, "load_coach_thread", json!({ "problemId": 900 })).unwrap()["thread"].is_null(), "other problems are separate");
+
+    // A new conversation starts empty, but the tokens already spent still count.
+    invoke(&h, "new_coach_thread", json!({ "problemId": 1 })).unwrap();
+    let fresh = invoke(&h, "load_coach_thread", json!({ "problemId": 1 })).unwrap();
+    assert!(fresh["thread"].is_null());
+    assert_eq!(fresh["problemUsage"], json!({ "input": 900, "output": 25 }));
+
+    // Nonsense is refused.
+    let bad = json!({ "seq": 0, "role": "robot", "label": null, "body": {}, "aboutCode": null, "inputTokens": null, "outputTokens": null });
+    assert!(invoke(&h, "save_coach_message", json!({ "problemId": 1, "message": bad })).unwrap_err().as_str().unwrap().contains("role"));
+    assert!(invoke(&h, "save_coach_message", json!({ "problemId": 424242, "message": user })).unwrap_err().as_str().unwrap().contains("not found"));
+}
+
+#[test]
+fn giving_up_works_over_ipc() {
+    let h = harness();
+    const DAY: i64 = 86_400_000;
+
+    // Before: nothing given up, and a preview of what it would cost and what could be won back.
+    let before = invoke(&h, "get_give_up_info", json!({ "problemId": 1 })).unwrap();
+    assert!(before["gaveUpAt"].is_null() && before["retryAt"].is_null());
+    assert_eq!(
+        (before["affectsRating"].as_bool(), before["previewChange"].as_i64(), before["previewRecoverable"].as_i64(), before["waitDays"].as_i64()),
+        (Some(true), Some(-14), Some(30), Some(3))
+    );
+
+    // Giving up costs rating (Two Sum is rated 1100, the user 1000) and starts the wait.
+    let info = invoke(&h, "give_up", json!({ "problemId": 1 })).unwrap();
+    let at = info["gaveUpAt"].as_i64().expect("when they gave up");
+    assert_eq!(info["retryAt"].as_i64(), Some(at + 3 * DAY));
+    assert_eq!((info["recoverable"].as_i64(), info["affectsRating"].as_bool()), (Some(30), Some(false)));
+    let rating = invoke(&h, "get_rating", json!({})).unwrap();
+    assert_eq!((rating["rating"].as_i64(), rating["games"].as_i64()), (Some(986), Some(1)));
+    assert_eq!(invoke(&h, "get_give_up_info", json!({ "problemId": 1 })).unwrap()["gaveUpAt"].as_i64(), Some(at));
+
+    // Pressing it twice is the same give-up.
+    invoke(&h, "give_up", json!({ "problemId": 1 })).unwrap();
+    assert_eq!(invoke(&h, "get_rating", json!({})).unwrap()["rating"], 986);
+
+    // A problem that doesn't exist is refused.
+    let err = invoke(&h, "give_up", json!({ "problemId": 424242 })).unwrap_err();
+    assert!(err.as_str().unwrap().contains("not found"), "{err}");
+    assert_eq!(invoke(&h, "get_rating", json!({})).unwrap()["games"], 1);
 }
 
 #[test]

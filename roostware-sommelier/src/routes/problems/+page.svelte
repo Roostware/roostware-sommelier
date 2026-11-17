@@ -11,6 +11,7 @@
     type SortKey as ApiSortKey,
     type StatusFilter as Status,
   } from "$lib/db";
+  import { settings } from "$lib/settings.svelte";
   import { openProblem } from "$lib/solve.svelte";
 
   // ---- Search --------------------------------------------------------------
@@ -66,13 +67,23 @@
   // ---- Collections dropdown ------------------------------------------------
   // The user's own collections (custom groups of problems; not LeetCode's topic tags).
   let collections = $state<CollectionSummary[]>([]);
+  // The built-in (curated) lists only show while the "Show curated collections" setting is on.
+  let visibleCollections = $derived(
+    settings.showCuratedCollections ? collections : collections.filter((c) => !c.builtin),
+  );
 
   let options = $derived<{ id: string | null; name: string; count: number | null }[]>([
     { id: null, name: "All collections", count: null },
-    ...collections.map((c) => ({ id: c.id, name: c.name, count: c.problemCount })),
+    ...visibleCollections.map((c) => ({ id: c.id, name: c.name, count: c.problemCount })),
   ]);
 
   let collectionId = $state<string | null>(null);
+  // Turning the setting off while one of those lists is selected goes back to all problems.
+  $effect(() => {
+    if (collectionId !== null && collections.length > 0 && !options.some((o) => o.id === collectionId)) {
+      collectionId = null;
+    }
+  });
   let selectedOption = $derived(options.find((o) => o.id === collectionId) ?? options[0]);
 
   let open = $state(false);
@@ -148,7 +159,7 @@
   };
 
   const difficultyColor = Object.fromEntries(difficulties.map((d) => [d.label, d.color]));
-  let collectionName = $derived(Object.fromEntries(collections.map((c) => [c.id, c.name])));
+  let collectionName = $derived(Object.fromEntries(visibleCollections.map((c) => [c.id, c.name])));
 
   // ---- Sorting -------------------------------------------------------------
   type SortKey = "name" | "difficulty" | "progress" | "solveCount";

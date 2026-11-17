@@ -1,0 +1,47 @@
+{
+  "_comment": "The 17 patterns the app tracks, and how LeetCode's topic tags map onto them. 'tier' is the learning order (also how the dashboard lists them); 'requires' are the patterns that should be partly solved first (a soft gate that, once passed, never closes again: forgetting doesn't re-lock; a locked pattern is strongly deprioritized and aims at its easiest problems). Tier-0 patterns are fallbacks: a problem only counts toward them when no more specific pattern applies. 'tagsUnlessTree' tags credit the pattern only when the problem isn't also a tree problem. Tags not listed anywhere (Sorting, Interactive) mean nothing about the pattern and are ignored.",
+  "treeTags": ["Tree", "Binary Tree", "Binary Search Tree"],
+  "patterns": [
+    {
+      "id": "arrays-hashing", "name": "Arrays & Hashing", "short": "Arrays", "tier": 0, "requires": [],
+      "tags": ["Array", "Hash Table", "String", "Counting", "Matrix", "Simulation", "Enumeration", "Prefix Sum", "Hash Function", "Data Stream"]
+    },
+    {
+      "id": "math-bits", "name": "Math & Bit Manipulation", "short": "Math & Bits", "tier": 0, "requires": [],
+      "tags": ["Math", "Number Theory", "Combinatorics", "Geometry", "Bit Manipulation", "Bitmask", "Brainteaser", "Probability and Statistics", "Randomized", "Reservoir Sampling", "Rejection Sampling", "Game Theory"]
+    },
+    { "id": "two-pointers", "name": "Two Pointers", "short": "Two Pointers", "tier": 1, "requires": ["arrays-hashing"], "tags": ["Two Pointers"] },
+    { "id": "sliding-window", "name": "Sliding Window", "short": "Sliding Window", "tier": 1, "requires": ["two-pointers"], "tags": ["Sliding Window"] },
+    { "id": "binary-search", "name": "Binary Search", "short": "Binary Search", "tier": 1, "requires": ["arrays-hashing"], "tags": ["Binary Search"] },
+    { "id": "stacks-queues", "name": "Stacks & Queues", "short": "Stacks", "tier": 1, "requires": ["arrays-hashing"], "tags": ["Stack", "Queue", "Monotonic Stack", "Monotonic Queue"] },
+    { "id": "linked-list", "name": "Linked List", "short": "Linked List", "tier": 1, "requires": ["arrays-hashing"], "tags": ["Linked List", "Doubly-Linked List"] },
+    {
+      "id": "sorting-intervals", "name": "Sorting & Intervals", "short": "Intervals", "tier": 1, "requires": ["arrays-hashing"],
+      "tags": ["Merge Sort", "Quickselect", "Bucket Sort", "Counting Sort", "Radix Sort", "Line Sweep"]
+    },
+    { "id": "trees", "name": "Trees", "short": "Trees", "tier": 2, "requires": ["binary-search", "linked-list"], "tags": ["Tree", "Binary Tree", "Binary Search Tree"] },
+    { "id": "heap", "name": "Heap", "short": "Heap", "tier": 2, "requires": ["trees"], "tags": ["Heap (Priority Queue)"] },
+    { "id": "recursion-backtracking", "name": "Recursion & Backtracking", "short": "Backtracking", "tier": 2, "requires": ["trees"], "tags": ["Backtracking", "Recursion", "Divide and Conquer"] },
+    { "id": "greedy", "name": "Greedy", "short": "Greedy", "tier": 2, "requires": ["arrays-hashing", "two-pointers"], "tags": ["Greedy"] },
+    { "id": "tries-strings", "name": "Tries & String Matching", "short": "Tries", "tier": 2, "requires": ["trees"], "tags": ["Trie", "String Matching", "Rolling Hash", "Suffix Array"] },
+    {
+      "id": "graphs", "name": "Graphs", "short": "Graphs", "tier": 3, "requires": ["trees", "recursion-backtracking"],
+      "tags": ["Graph", "Graph Theory"], "tagsUnlessTree": ["Breadth-First Search", "Depth-First Search"]
+    },
+    { "id": "dynamic-programming", "name": "Dynamic Programming", "short": "DP", "tier": 3, "requires": ["recursion-backtracking"], "tags": ["Dynamic Programming", "Memoization"] },
+    {
+      "id": "advanced-graphs", "name": "Advanced Graphs", "short": "Adv. Graphs", "tier": 4, "requires": ["graphs", "heap"],
+      "tags": ["Union Find", "Union-Find", "Topological Sort", "Shortest Path", "Minimum Spanning Tree", "Strongly Connected Component", "Eulerian Circuit", "Biconnected Component"]
+    },
+    {
+      "id": "design-structures", "name": "Design & Advanced Structures", "short": "Design", "tier": 4, "requires": ["linked-list", "stacks-queues", "heap"],
+      "tags": ["Design", "Iterator", "Segment Tree", "Binary Indexed Tree", "Ordered Set"]
+    }
+  ],
+  "intervalProblems": [
+    "merge-intervals", "insert-interval", "non-overlapping-intervals", "minimum-number-of-arrows-to-burst-balloons",
+    "interval-list-intersections", "remove-covered-intervals", "my-calendar-i", "my-calendar-ii", "my-calendar-iii",
+    "car-pooling", "find-right-interval", "data-stream-as-disjoint-intervals", "minimum-interval-to-include-each-query",
+    "meeting-rooms", "meeting-rooms-ii"
+  ]
+}

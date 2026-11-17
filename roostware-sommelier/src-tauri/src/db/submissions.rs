@@ -8,7 +8,7 @@
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
-use super::{drafts, new_id, now_ms, Error, Result};
+use super::{drafts, new_id, now_ms, reviews, Error, Result};
 
 /// A stored submission, as shown in a problem's history. (The raw LeetCode response, kept in the
 /// `result_json` column for the future, isn't sent to the frontend.)
@@ -41,6 +41,10 @@ pub struct Submission {
     pub error_message: Option<String>,
     /// Epoch milliseconds, UTC.
     pub submitted_at: i64,
+    /// For an Accepted submission, the spaced-repetition review it logged (none when it was a
+    /// resubmit in the same sitting as a recent review) and its grade, 1 Again to 4 Easy.
+    pub review_id: Option<String>,
+    pub review_grade: Option<i64>,
 }
 
 /// What to store for a new submission (id and times are assigned here).
@@ -78,7 +82,9 @@ pub struct LastSubmitted {
 
 const COLUMNS: &str = "id, problem_id, lang, code, leetcode_submission_id, status, status_code, runtime_ms,
     runtime_percentile, memory_kb, memory_percentile, total_correct, total_testcases, last_testcase,
-    expected_output, code_output, error_message, submitted_at";
+    expected_output, code_output, error_message, submitted_at,
+    (SELECT r.id FROM main.reviews r WHERE r.submission_id = submissions.id AND r.deleted_at IS NULL) AS review_id,
+    (SELECT r.grade FROM main.reviews r WHERE r.submission_id = submissions.id AND r.deleted_at IS NULL) AS review_grade";
 
 fn from_row(r: &Row) -> rusqlite::Result<Submission> {
     Ok(Submission {
@@ -100,6 +106,8 @@ fn from_row(r: &Row) -> rusqlite::Result<Submission> {
         code_output: r.get(15)?,
         error_message: r.get(16)?,
         submitted_at: r.get(17)?,
+        review_id: r.get(18)?,
+        review_grade: r.get(19)?,
     })
 }
 
@@ -147,6 +155,11 @@ pub fn record(conn: &mut Connection, new: NewSubmission) -> Result<Submission> {
         ],
     )?;
 
+    // Solving a problem is a spaced-repetition review of it (graded by a guess the user can change).
+    if new.status == "Accepted" {
+        reviews::record_accepted(&tx, new.problem_id, &id, now)?;
+    }
+
     // The draft is only "unsubmitted" work: if it is exactly what was just submitted, it's done.
     let draft: Option<String> = tx
         .query_row(
@@ -178,6 +191,17 @@ pub fn list(conn: &Connection, problem_id: i64) -> Result<Vec<Submission>> {
         ))?
         .query_map([problem_id], from_row)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// When each of the user's submissions was made (any problem, any verdict), oldest first, as epoch
+/// milliseconds UTC. The dashboard's activity graph and streak are built from these; which
+/// calendar day each belongs to is the user's local time, so that's left to the frontend.
+pub fn times(conn: &Connection) -> Result<Vec<i64>> {
+    let rows = conn
+        .prepare("SELECT submitted_at FROM main.submissions WHERE deleted_at IS NULL ORDER BY submitted_at")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<i64>>>()?;
     Ok(rows)
 }
 
@@ -375,6 +399,26 @@ mod tests {
         let got = db.with(|c| last_submitted(c, 1)).unwrap();
         assert_eq!(got.iter().map(|s| (s.lang.as_str(), s.code.as_str())).collect::<Vec<_>>(), [("python3", "new"), ("cpp", "cpp")]);
         assert!(db.with(|c| last_submitted(c, 2)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn times_cover_every_problem_and_verdict_oldest_first_without_deleted_ones() {
+        let (_d, db) = setup();
+        assert!(db.with(|c| times(c)).unwrap().is_empty());
+        db.with(|c| {
+            record(c, new(1, "python3", "a", "Wrong Answer"))?;
+            record(c, new(1, "python3", "b", "Accepted"))?;
+            record(c, new(900, "python3", "c", "Accepted"))?;
+            record(c, new(900, "python3", "gone", "Accepted"))?;
+            // Out of order on purpose, so the sort is what's being tested.
+            c.execute("UPDATE submissions SET submitted_at = 3000 WHERE code = 'a'", [])?;
+            c.execute("UPDATE submissions SET submitted_at = 1000 WHERE code = 'b'", [])?;
+            c.execute("UPDATE submissions SET submitted_at = 2000 WHERE code = 'c'", [])?;
+            c.execute("UPDATE submissions SET submitted_at = 500, deleted_at = 5 WHERE code = 'gone'", [])?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(db.with(|c| times(c)).unwrap(), vec![1000, 2000, 3000]);
     }
 
     #[test]

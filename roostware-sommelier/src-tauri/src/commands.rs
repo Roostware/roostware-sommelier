@@ -9,7 +9,13 @@ use crate::{
     db::{
         collections::{self, CollectionSummary},
         drafts,
+        give_ups::{self, GiveUpInfo},
+        now_ms,
         problems::{self, ProblemDetail, ProblemPage, ProblemQuery, RecentProblem, TagCount},
+        rating::{self, RatingSummary},
+        recommendations::{self, DailySet, PatternStrength},
+        reset, reviews,
+        settings::{self, CoachSettings, Settings},
         submissions::{self, Submission},
         Db, Result,
     },
@@ -47,6 +53,29 @@ pub async fn list_tags(db: State<'_, Db>) -> Result<Vec<TagCount>> {
 #[tauri::command]
 pub async fn list_collections(db: State<'_, Db>) -> Result<Vec<CollectionSummary>> {
     db.with(|conn| collections::list(conn))
+}
+
+/// Makes a new collection holding this problem (collections only exist while they have
+/// problems, so it can't be made empty). Fails if the name is blank, too long or already used.
+#[tauri::command]
+pub async fn create_collection(db: State<'_, Db>, name: String, problem_id: i64) -> Result<CollectionSummary> {
+    db.with(|conn| collections::create(conn, &name, problem_id))
+}
+
+/// Adds a problem to one of the user's collections. Fine if it's already in it.
+#[tauri::command]
+pub async fn add_problem_to_collection(db: State<'_, Db>, collection_id: String, problem_id: i64) -> Result<()> {
+    db.with(|conn| collections::add_problem(conn, &collection_id, problem_id))
+}
+
+/// Takes a problem out of a collection. A collection left with no problems is deleted.
+#[tauri::command]
+pub async fn remove_problem_from_collection(
+    db: State<'_, Db>,
+    collection_id: String,
+    problem_id: i64,
+) -> Result<()> {
+    db.with(|conn| collections::remove_problem(conn, &collection_id, problem_id))
 }
 
 /// Records that the user just opened a problem (feeds the "recently opened" list).
@@ -89,6 +118,16 @@ pub async fn leetcode_status(lc: State<'_, LeetCode>) -> leetcode::Result<AuthSt
 #[tauri::command]
 pub async fn leetcode_sign_in<R: Runtime>(app: AppHandle<R>, lc: State<'_, LeetCode>) -> leetcode::Result<AuthStatus> {
     auth::sign_in(&app, &lc).await
+}
+
+/// Erases everything the user has saved (drafts, submissions, ratings, reviews, collections,
+/// notes, settings, saved conversations) and leaves the app as on a first launch. The LeetCode
+/// login and API keys live in the OS credential store, and are cleared with `leetcode_sign_out`
+/// and `clear_coach_key`. With `keep_ai_setup`, the AI provider, model, address and prices stay as
+/// they were (for a user who is keeping their API keys, which only work with their provider).
+#[tauri::command]
+pub async fn reset_user_data(db: State<'_, Db>, keep_ai_setup: bool) -> Result<()> {
+    db.with(|conn| reset::wipe(conn, keep_ai_setup))
 }
 
 /// Forgets the stored login.
@@ -149,4 +188,91 @@ pub async fn submit_code(
 #[tauri::command]
 pub async fn list_submissions(db: State<'_, Db>, problem_id: i64) -> Result<Vec<Submission>> {
     db.with(|conn| submissions::list(conn, problem_id))
+}
+
+// ---- Recommendations -----------------------------------------------------------------------
+
+/// Today's recommended problems: a few due reviews, then new problems for the patterns the user
+/// knows least. `day` is the user's local date (YYYY-MM-DD). The set is made the first time it's
+/// asked for each day and then kept, so it doesn't reshuffle.
+#[tauri::command]
+pub async fn get_daily_recommendations(db: State<'_, Db>, day: String) -> Result<DailySet> {
+    db.with(|conn| recommendations::daily_set(conn, &day, now_ms()))
+}
+
+/// How strong the user is in each of the 17 patterns (0 to 100), in learning order.
+#[tauri::command]
+pub async fn get_pattern_strengths(db: State<'_, Db>) -> Result<Vec<PatternStrength>> {
+    db.with(|conn| recommendations::pattern_strengths(conn, now_ms()))
+}
+
+/// The user's overall skill rating, its history, and how it moved this week. Replayed from the
+/// solves each time; nothing is stored.
+#[tauri::command]
+pub async fn get_rating(db: State<'_, Db>) -> Result<RatingSummary> {
+    db.with(|conn| rating::summary(conn, now_ms()))
+}
+
+// ---- Settings ------------------------------------------------------------------------------
+
+/// The user's preferences (defaults for any they haven't changed).
+#[tauri::command]
+pub async fn get_settings(db: State<'_, Db>) -> Result<Settings> {
+    db.with(|conn| settings::all(conn))
+}
+
+/// How many problems the daily set has, 1 to 10. Today's set follows at once: raising it tops
+/// it up, lowering it trims it (keeping solved problems).
+#[tauri::command]
+pub async fn set_daily_problem_count(db: State<'_, Db>, count: usize) -> Result<()> {
+    db.with(|conn| settings::set_daily_count(conn, count))
+}
+
+/// Whether the app's curated collections (Blind 75, …) are shown in the problem list.
+#[tauri::command]
+pub async fn set_show_curated_collections(db: State<'_, Db>, show: bool) -> Result<()> {
+    db.with(|conn| settings::set_show_curated_collections(conn, show))
+}
+
+/// The AI coach's settings: whether it shows in the Solve tab, which provider and model it uses, the
+/// address of an OpenAI-compatible server, and optional prices for the usage line. Rejects an
+/// unknown provider, a model name over 100 characters, a base URL that isn't http(s), or a price
+/// out of range. (The API key is separate: `set_coach_key`.)
+#[tauri::command]
+pub async fn set_coach_settings(db: State<'_, Db>, settings: CoachSettings) -> Result<()> {
+    db.with(|conn| settings::set_coach(conn, &settings))
+}
+
+// ---- Giving up -----------------------------------------------------------------------------
+
+/// Gives up on a problem: logs an Again review for it and, if it has no result yet, a loss in the
+/// rating that a later solve can win most of back (after a wait). Returns the problem's give-up
+/// state as it now stands. The caller shows the solution.
+#[tauri::command]
+pub async fn give_up(db: State<'_, Db>, problem_id: i64) -> Result<GiveUpInfo> {
+    db.with(|conn| {
+        let now = now_ms();
+        give_ups::record(conn, problem_id, now)?;
+        give_ups::info(conn, problem_id, now)
+    })
+}
+
+/// A problem's give-up state, and a preview of what giving up now would do to the rating.
+#[tauri::command]
+pub async fn get_give_up_info(db: State<'_, Db>, problem_id: i64) -> Result<GiveUpInfo> {
+    db.with(|conn| give_ups::info(conn, problem_id, now_ms()))
+}
+
+/// Sets how a solve went (1 Again, 2 Hard, 3 Good, 4 Easy), replacing the grade that was guessed.
+/// The review's id is on the Accepted submission.
+#[tauri::command]
+pub async fn set_review_grade(db: State<'_, Db>, review_id: String, grade: i64) -> Result<()> {
+    db.with(|conn| reviews::set_grade(conn, &review_id, grade))
+}
+
+/// When every submission was made, oldest first (epoch milliseconds, UTC). Feeds the dashboard's
+/// activity graph and streak.
+#[tauri::command]
+pub async fn list_submission_times(db: State<'_, Db>) -> Result<Vec<i64>> {
+    db.with(|conn| submissions::times(conn))
 }

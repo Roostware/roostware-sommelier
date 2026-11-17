@@ -1,24 +1,124 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { countByDay, currentStreak, dailyRatings, dayNumber, localDateKey } from "$lib/activity";
+  import {
+    getDailyRecommendations,
+    getPatternStrengths,
+    getRating,
+    listProblems,
+    listSubmissionTimes,
+    type DailyItem,
+    type Difficulty,
+    type PatternStrength,
+    type RatingSummary,
+  } from "$lib/db";
+  import { leetcode } from "$lib/leetcode.svelte";
+  import { settings } from "$lib/settings.svelte";
   import { openProblem } from "$lib/solve.svelte";
 
-  // TODO: replace with the signed-in user's name once it's available.
-  const userName = "EulerNumber";
+  // The name of the LeetCode account the user is signed in with; the greeting leaves it out
+  // when they aren't signed in.
+  let userName = $derived(leetcode.status?.signedIn ? leetcode.status.username || null : null);
 
-  // TODO: replace with the user's real solved-problem counts by difficulty.
-  const solvedByDifficulty = [
-    { label: "Easy", count: 64, color: "#3FAE7F" },
-    { label: "Medium", count: 48, color: "#EBA337" },
-    { label: "Hard", count: 16, color: "#FF5555" },
+  const DIFFICULTIES: { label: Difficulty; color: string }[] = [
+    { label: "Easy", color: "#3FAE7F" },
+    { label: "Medium", color: "#EBA337" },
+    { label: "Hard", color: "#FF5555" },
   ];
 
-  const problemsSolved = solvedByDifficulty.reduce((sum, d) => sum + d.count, 0);
+  // How many problems the user has solved (an Accepted submission), by difficulty. Zero until
+  // loaded, so the numbers count up from nothing when they arrive.
+  let solvedCounts = $state<Record<Difficulty, number>>({ Easy: 0, Medium: 0, Hard: 0 });
+  let solvedByDifficulty = $derived(DIFFICULTIES.map((d) => ({ ...d, count: solvedCounts[d.label] })));
+  let problemsSolved = $derived(solvedByDifficulty.reduce((sum, d) => sum + d.count, 0));
 
-  // TODO: replace with the user's real rating history (oldest first, last is current)
-  // and the real change over the current week.
-  const ratingHistory = [1540, 1555, 1548, 1572, 1590, 1585, 1610, 1618, 1642];
-  const rating = ratingHistory[ratingHistory.length - 1];
-  const weeklyChange = 24;
+  // Submissions per local day (see $lib/activity), for the activity graph and the streak.
+  let submissionsByDay = $state.raw(new Map<number, number>());
+
+  onMount(() => {
+    if (leetcode.status === null) void leetcode.load(); // for the name in the greeting
+
+    // The page is rebuilt each time it's visited, so this is always fresh after a submission.
+    // The two reads are independent: if one fails the rest of the page still shows.
+    void (async () => {
+      try {
+        const totals = await Promise.all(
+          DIFFICULTIES.map((d) =>
+            listProblems({ filter: { difficulties: [d.label], status: "solved" }, limit: 1 }).then((page) => page.total),
+          ),
+        );
+        solvedCounts = { Easy: totals[0], Medium: totals[1], Hard: totals[2] };
+      } catch (e) {
+        console.warn("Couldn't load the solved counts:", e);
+      }
+    })();
+    void (async () => {
+      try {
+        submissionsByDay = countByDay(await listSubmissionTimes());
+      } catch (e) {
+        console.warn("Couldn't load the submission history:", e);
+      }
+    })();
+    void (async () => {
+      try {
+        patterns = await getPatternStrengths();
+      } catch (e) {
+        console.warn("Couldn't load the pattern strengths:", e);
+      }
+    })();
+    void (async () => {
+      try {
+        ratingSummary = await getRating();
+      } catch (e) {
+        console.warn("Couldn't load the rating:", e);
+      }
+    })();
+  });
+
+  // Today's recommendations (kept for the day by the backend). Asked for again if the app stays
+  // open past midnight, and again when the "problems per day" setting changes (raising it tops
+  // up today's set; lowering it trims it).
+  let recommendations = $state<DailyItem[]>([]);
+
+  // Shown New problems first, then Review ones; within each, Easy then Medium then Hard, and by
+  // problem number inside a difficulty. (Solved ones keep their place.)
+  const KIND_ORDER = { new: 0, review: 1 };
+  const DIFFICULTY_ORDER: Record<Difficulty, number> = { Easy: 0, Medium: 1, Hard: 2 };
+  let sortedRecommendations = $derived(
+    [...recommendations].sort(
+      (a, b) =>
+        KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
+        DIFFICULTY_ORDER[a.difficulty] - DIFFICULTY_ORDER[b.difficulty] ||
+        a.frontendId - b.frontendId,
+    ),
+  );
+  let recommendationsKey = "";
+  $effect(() => {
+    // Wait for the saved setting, so the first request already has the right count.
+    if (!settings.loaded) return;
+    const day = localDateKey(now);
+    const key = `${day}:${settings.savedDailyProblemCount}`;
+    if (key === recommendationsKey) return;
+    recommendationsKey = key;
+    getDailyRecommendations(day)
+      .then((set) => {
+        if (recommendationsKey === key) recommendations = set.items;
+      })
+      .catch((e) => console.warn("Couldn't load today's recommendations:", e));
+  });
+
+  // The overall skill rating (see db/rating.rs): the number, how much it moved this week, and its
+  // history for the graph, one point per day it changed. Zero until loaded, so the number counts
+  // up when it arrives.
+  let ratingSummary = $state<RatingSummary | null>(null);
+  let rating = $derived(ratingSummary?.rating ?? 0);
+  let weeklyChange = $derived(ratingSummary?.weeklyChange ?? 0);
+  let ratingHistory = $derived.by(() => {
+    if (!ratingSummary) return [];
+    const days = dailyRatings(ratingSummary.history);
+    // Before the first solve there's nothing to draw but the starting level.
+    return days.length >= 2 ? days : [ratingSummary.rating, ratingSummary.rating];
+  });
 
   const GRAPH_PAD = 8;
   let graphWidth = $state(0);
@@ -27,11 +127,12 @@
   let graphPoints = $derived.by(() => {
     if (graphWidth === 0 || graphHeight === 0) return [];
     const min = Math.min(...ratingHistory);
-    const range = Math.max(...ratingHistory) - min || 1;
+    const range = Math.max(...ratingHistory) - min;
     const lastIndex = Math.max(ratingHistory.length - 1, 1);
     return ratingHistory.map((value, i) => ({
       x: GRAPH_PAD + (i / lastIndex) * (graphWidth - 2 * GRAPH_PAD),
-      y: GRAPH_PAD + (1 - (value - min) / range) * (graphHeight - 2 * GRAPH_PAD),
+      // A flat history (nothing yet, or no change) is drawn through the middle.
+      y: GRAPH_PAD + (1 - (range === 0 ? 0.5 : (value - min) / range)) * (graphHeight - 2 * GRAPH_PAD),
     }));
   });
   let linePath = $derived(
@@ -65,70 +166,45 @@
   const prefersReducedMotion =
     typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // Counts a number up from 0 when it first appears. The element is sized for the
-  // final value up front so surrounding content doesn't shift while it counts.
-  function countUp(node: HTMLElement, { value, delay = 0 }: { value: number; delay?: number }) {
-    node.style.minWidth = `${String(value).length}ch`;
-    if (prefersReducedMotion) {
-      node.textContent = String(value);
-      return;
+  // Counts a number up from 0 when it first appears, and from what it showed to the new value
+  // whenever the value changes (as real data arrives). The element is sized for the final value
+  // up front so surrounding content doesn't shift while it counts.
+  function countUp(node: HTMLElement, params: { value: number; delay?: number }) {
+    let shown = 0;
+    let frame = 0;
+
+    function run({ value, delay = 0 }: { value: number; delay?: number }) {
+      cancelAnimationFrame(frame);
+      node.style.minWidth = `${Math.max(String(value).length, String(shown).length)}ch`;
+      if (prefersReducedMotion) {
+        shown = value;
+        node.textContent = String(value);
+        return;
+      }
+
+      const duration = 800;
+      const from = shown;
+      node.textContent = String(from);
+      const startAt = performance.now() + delay;
+      const tick = (time: number) => {
+        const progress = Math.min(Math.max((time - startAt) / duration, 0), 1);
+        shown = Math.round(from + (value - from) * (1 - Math.pow(1 - progress, 3)));
+        node.textContent = String(shown);
+        if (progress < 1) frame = requestAnimationFrame(tick);
+      };
+      frame = requestAnimationFrame(tick);
     }
 
-    const duration = 800;
-    let frame = 0;
-    node.textContent = "0";
-    const startAt = performance.now() + delay;
-    const tick = (time: number) => {
-      const progress = Math.min(Math.max((time - startAt) / duration, 0), 1);
-      node.textContent = String(Math.round(value * (1 - Math.pow(1 - progress, 3))));
-      if (progress < 1) frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return { destroy: () => cancelAnimationFrame(frame) };
+    run(params);
+    return { update: run, destroy: () => cancelAnimationFrame(frame) };
   }
 
-  type Recommendation = {
-    id: number;
-    name: string;
-    difficulty: "Easy" | "Medium" | "Hard";
-    // "new" problems haven't been solved yet; "review" ones were selected for review.
-    kind: "new" | "review";
-    lastSolved: string | null; // ISO date (YYYY-MM-DD), only for "review"
-  };
-
-  // TODO: replace with the real recommendations.
-  const recommendations: Recommendation[] = [
-    { id: 1, name: "Two Sum", difficulty: "Easy", kind: "new", lastSolved: null },
-    {
-      id: 3,
-      name: "Longest Substring Without Repeating Characters",
-      difficulty: "Medium",
-      kind: "review",
-      lastSolved: "2026-10-21",
-    },
-    { id: 15, name: "3Sum", difficulty: "Medium", kind: "new", lastSolved: null },
-    { id: 42, name: "Trapping Rain Water", difficulty: "Hard", kind: "review", lastSolved: "2026-09-30" },
-    { id: 200, name: "Number of Islands", difficulty: "Medium", kind: "review", lastSolved: "2026-10-29" },
-    { id: 20, name: "Valid Parentheses", difficulty: "Easy", kind: "new", lastSolved: null },
-  ];
-
-  // Listed new problems first, then review ones; within each group easiest first,
-  // then by problem number.
-  const KIND_ORDER = { new: 0, review: 1 };
-  const DIFFICULTY_ORDER = { Easy: 0, Medium: 1, Hard: 2 };
-  const sortedRecommendations = [...recommendations].sort(
-    (a, b) =>
-      KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
-      DIFFICULTY_ORDER[a.difficulty] - DIFFICULTY_ORDER[b.difficulty] ||
-      a.id - b.id,
-  );
-
   const difficultyColor: Record<string, string> = Object.fromEntries(
-    solvedByDifficulty.map((d) => [d.label, d.color]),
+    DIFFICULTIES.map((d) => [d.label, d.color]),
   );
 
-  function formatDate(iso: string) {
-    const date = new Date(`${iso}T00:00:00`);
+  function formatDate(ms: number) {
+    const date = new Date(ms);
     return date.toLocaleDateString(undefined, {
       month: "short",
       day: "numeric",
@@ -148,13 +224,6 @@
     return 4;
   }
 
-  // TODO: replace with the user's real problems-solved count per day.
-  // Placeholder: a stable pseudo-random count derived from the day number.
-  function placeholderCount(dayNumber: number) {
-    const hash = Math.imul(dayNumber, 2654435761) >>> 0;
-    return [0, 0, 0, 1, 1, 2, 3, 4, 6, 8][(hash >>> 16) % 10];
-  }
-
   // One entry per day, oldest first, starting on a Sunday so each column is a week
   // (Sunday at the top) and ending today.
   let activityDays = $derived.by(() => {
@@ -165,10 +234,7 @@
     const days: { date: Date; count: number; level: number }[] = [];
     for (const d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
       const date = new Date(d);
-      const dayNumber = Math.floor(
-        Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000,
-      );
-      const count = placeholderCount(dayNumber);
+      const count = submissionsByDay.get(dayNumber(date)) ?? 0;
       days.push({ date, count, level: activityLevel(count) });
     }
     return days;
@@ -222,79 +288,76 @@
     hoveredCell = null;
   }
 
-  // TODO: replace with the user's real strength (0-100) in each pattern.
-  const patterns = [
-    { name: "Two Pointers", short: "Two Pointers", value: 82 },
-    { name: "Sliding Window", short: "Sliding Window", value: 74 },
-    { name: "Binary Search", short: "Binary Search", value: 68 },
-    { name: "Stack", short: "Stack", value: 61 },
-    { name: "Linked List", short: "Linked List", value: 77 },
-    { name: "Trees", short: "Trees", value: 85 },
-    { name: "Graphs", short: "Graphs", value: 48 },
-    { name: "Heap", short: "Heap", value: 55 },
-    { name: "Backtracking", short: "Backtracking", value: 42 },
-    { name: "Dynamic Programming", short: "DP", value: 36 },
-    { name: "Greedy", short: "Greedy", value: 58 },
-    { name: "Intervals", short: "Intervals", value: 64 },
-  ];
+  // The user's strength (0-100) in each of the 17 patterns, in learning order. Empty until loaded.
+  let patterns = $state<PatternStrength[]>([]);
 
   // The radar chart is drawn in a fixed coordinate system and scaled to fit its container.
-  const RADAR = { w: 440, h: 380, cx: 220, cy: 190, r: 120 };
+  // Wide rather than tall, so 17 axes' worth of labels stay readable in the card.
+  const RADAR = { w: 520, h: 330, cx: 260, cy: 165, r: 118 };
 
-  function radarPoint(index: number, fraction: number, radius = RADAR.r) {
-    const angle = -Math.PI / 2 + (index / patterns.length) * 2 * Math.PI;
+  function radarPoint(count: number, index: number, fraction: number, radius = RADAR.r) {
+    const angle = -Math.PI / 2 + (index / count) * 2 * Math.PI;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     return { x: RADAR.cx + cos * radius * fraction, y: RADAR.cy + sin * radius * fraction, cos, sin };
   }
 
-  function radarPath(fractionAt: (index: number) => number) {
+  function radarPath(count: number, fractionAt: (index: number) => number) {
     return (
-      patterns
-        .map((_, i) => {
-          const p = radarPoint(i, fractionAt(i));
-          return `${i === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
-        })
-        .join(" ") + " Z"
+      Array.from({ length: count }, (_, i) => {
+        const p = radarPoint(count, i, fractionAt(i));
+        return `${i === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+      }).join(" ") + " Z"
     );
   }
 
-  const radarRings = [0.25, 0.5, 0.75, 1].map((level) => radarPath(() => level));
-  const radarAxes = patterns.map((_, i) => radarPoint(i, 1));
-  const radarData = radarPath((i) => patterns[i].value / 100);
-  const radarVertices = patterns.map((p, i) => radarPoint(i, p.value / 100));
-  const radarLabels = patterns.map((p, i) => {
-    const pt = radarPoint(i, 1, RADAR.r + 12);
-    return {
-      text: p.short,
-      x: pt.x,
-      y: pt.y,
-      anchor: pt.cos > 0.3 ? "start" : pt.cos < -0.3 ? "end" : "middle",
-      dy: pt.sin > 0.3 ? "0.8em" : pt.sin < -0.3 ? "0" : "0.35em",
-    };
-  });
+  let radarRings = $derived(
+    patterns.length === 0 ? [] : [0.25, 0.5, 0.75, 1].map((level) => radarPath(patterns.length, () => level)),
+  );
+  let radarAxes = $derived(patterns.map((_, i) => radarPoint(patterns.length, i, 1)));
+  let radarData = $derived(
+    patterns.length === 0 ? "" : radarPath(patterns.length, (i) => patterns[i].value / 100),
+  );
+  let radarVertices = $derived(patterns.map((p, i) => radarPoint(patterns.length, i, p.value / 100)));
+  let radarLabels = $derived(
+    patterns.map((p, i) => {
+      const pt = radarPoint(patterns.length, i, 1, RADAR.r + 12);
+      return {
+        text: p.short,
+        x: pt.x,
+        y: pt.y,
+        anchor: pt.cos > 0.3 ? "start" : pt.cos < -0.3 ? "end" : "middle",
+        dy: pt.sin > 0.3 ? "0.8em" : pt.sin < -0.3 ? "0" : "0.35em",
+      };
+    }),
+  );
 
-  // TODO: replace with the user's real streak and per-day activity.
-  const dailyStreak: number = 12;
-  // Oldest first; the last entry is today.
-  const weekActivity = [true, false, true, true, true, true, true];
+  // Consecutive days with a submission (see currentStreak for how today is treated).
+  let dailyStreak = $derived(currentStreak(submissionsByDay, dayNumber(now)));
 
   const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const WEEK_DAYS = 7;
 
-  // The seven days ending today, labelled with a single letter relative to the current day.
+  // The seven days ending today (oldest first), labelled with a single letter and marked
+  // active if there was a submission that day.
   let streakDays = $derived(
-    weekActivity.map((active, i) => {
+    Array.from({ length: WEEK_DAYS }, (_, i) => {
       const date = new Date(now);
-      date.setDate(now.getDate() - (weekActivity.length - 1 - i));
+      date.setDate(now.getDate() - (WEEK_DAYS - 1 - i));
       const name = DAY_NAMES[date.getDay()];
-      return { name, letter: name[0], active, today: i === weekActivity.length - 1 };
+      return {
+        name,
+        letter: name[0],
+        active: submissionsByDay.has(dayNumber(date)),
+        today: i === WEEK_DAYS - 1,
+      };
     }),
   );
 </script>
 
 <div class="home">
   <header>
-    <h1>{greeting}, {userName}!</h1>
+    <h1>{greeting}{userName ? `, ${userName}` : ""}!</h1>
     <p class="subtitle">Ready to start coding?</p>
   </header>
 
@@ -333,28 +396,37 @@
           <div class="rating-summary">
             <p class="rating-value" use:countUp={{ value: rating, delay: 150 }}></p>
             <p class="rating-change">
-              <svg
-                class="arrow"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="3"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                {#if weeklyChange >= 0}
-                  <path d="M12 19V5" /><path d="m5 12 7-7 7 7" />
-                {:else}
-                  <path d="M12 5v14" /><path d="m19 12-7 7-7-7" />
-                {/if}
-              </svg>
-              <span>{weeklyChange >= 0 ? "+" : "−"}{Math.abs(weeklyChange)} this week</span>
+              {#if weeklyChange !== 0}
+                <svg
+                  class="arrow"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="3"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  {#if weeklyChange > 0}
+                    <path d="M12 19V5" /><path d="m5 12 7-7 7 7" />
+                  {:else}
+                    <path d="M12 5v14" /><path d="m19 12-7 7-7-7" />
+                  {/if}
+                </svg>
+                <span>{weeklyChange > 0 ? "+" : "−"}{Math.abs(weeklyChange)} this week</span>
+              {:else}
+                <span>No change this week</span>
+              {/if}
+              {#if ratingSummary?.provisional}
+                <span>· provisional</span>
+              {/if}
             </p>
           </div>
           <div class="rating-graph" bind:clientWidth={graphWidth} bind:clientHeight={graphHeight}>
             <svg width={graphWidth} height={graphHeight} role="img" aria-label="Rating history">
-              <path class="line" pathLength="1" d={linePath} />
+              {#if linePath}
+                <path class="line" pathLength="1" d={linePath} />
+              {/if}
               {#if currentPoint}
                 <circle class="dot-current" cx={currentPoint.x} cy={currentPoint.y} r="4.5" />
               {/if}
@@ -408,20 +480,20 @@
       </div>
       <div class="section card-body rec-body">
         <ul class="rec-list">
-          {#each sortedRecommendations as rec, i}
-            <li class="rec-item" style="--i: {i}">
+          {#each sortedRecommendations as rec, i (rec.problemId)}
+            <li class="rec-item" class:done={rec.done} style="--i: {i}">
               <div class="rec-title">
-                <span class="rec-number">{rec.id}.</span>
-                <span class="rec-name">{rec.name}</span>
+                <span class="rec-number">{rec.frontendId}.</span>
+                <span class="rec-name">{rec.title}</span>
               </div>
               <div class="rec-tag-cell">
-                <span class="rec-tag" class:review={rec.kind === "review"}>
-                  {rec.kind === "review" ? "Review" : "New"}
+                <span class="rec-tag" class:review={rec.kind === "review"} class:finished={rec.done}>
+                  {rec.done ? "Done" : rec.kind === "review" ? "Review" : "New"}
                 </span>
               </div>
               <div class="rec-solved">
-                {#if rec.kind === "review" && rec.lastSolved}
-                  Last solved {formatDate(rec.lastSolved)}
+                {#if rec.kind === "review" && rec.lastSolvedAt !== null}
+                  Last solved {formatDate(rec.lastSolvedAt)}
                 {/if}
               </div>
               <div class="rec-difficulty-cell">
@@ -433,8 +505,8 @@
               <button
                 type="button"
                 class="rec-open"
-                aria-label="Open problem {rec.id}: {rec.name}"
-                onclick={() => openProblem(rec.id)}
+                aria-label="Open problem {rec.frontendId}: {rec.title}"
+                onclick={() => openProblem(rec.problemId)}
               >
                 Open
                 <svg
@@ -527,7 +599,7 @@
         </div>
         <ul class="pattern-bars">
           {#each patterns as p, i}
-            <li class="pattern-bar" style="--i: {i}">
+            <li class="pattern-bar" class:locked={!p.unlocked} style="--i: {i}">
               <div class="pattern-bar-head">
                 <span class="pattern-name">{p.name}</span>
                 <span class="pattern-value">{p.value}</span>
@@ -1028,6 +1100,18 @@
     line-height: calc(20 * var(--u));
   }
 
+  /* Already solved today: still there, but out of the way. */
+  .rec-item.done .rec-title,
+  .rec-item.done .rec-solved,
+  .rec-item.done .rec-difficulty {
+    opacity: 0.55;
+  }
+
+  .rec-tag.finished {
+    color: #3fae7f;
+    background-color: rgba(63, 174, 127, 0.16);
+  }
+
   .rec-number {
     flex: none;
     font-variant-numeric: tabular-nums;
@@ -1071,6 +1155,9 @@
   }
 
   .rec-solved {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: calc(11 * var(--u));
     line-height: calc(16 * var(--u));
     color: #a8a296;
@@ -1154,10 +1241,15 @@
     flex: none;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: calc(10 * var(--u)) calc(24 * var(--u));
+    gap: calc(5 * var(--u)) calc(24 * var(--u));
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  /* A pattern whose groundwork isn't laid yet. */
+  .pattern-bar.locked .pattern-name {
+    color: #8d877b;
   }
 
   .pattern-bar-head {

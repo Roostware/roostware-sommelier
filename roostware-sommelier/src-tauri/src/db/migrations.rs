@@ -7,7 +7,12 @@ use rusqlite::Connection;
 
 use super::{Error, Result};
 
-pub const ALL: &[&str] = &[include_str!("migrations/0001_init.sql")];
+pub const ALL: &[&str] = &[
+    include_str!("migrations/0001_init.sql"),
+    include_str!("migrations/0002_recommendations.sql"),
+    include_str!("migrations/0003_give_ups.sql"),
+    include_str!("migrations/0004_coach_threads.sql"),
+];
 
 pub fn current_version(conn: &Connection) -> Result<i64> {
     Ok(conn.pragma_query_value(None, "user_version", |row| row.get(0))?)
