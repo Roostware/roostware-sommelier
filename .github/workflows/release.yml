@@ -28,6 +28,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: roostware-sommelier/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -35,9 +36,10 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: roostware-sommelier/src-tauri
 
       - run: npm ci
+        working-directory: roostware-sommelier
 
       # tauri build runs `beforeBuildCommand` (catalog:ensure + vite build), which
       # downloads the problem dataset and generates src-tauri/resources/catalog.db.
@@ -45,6 +47,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          projectPath: roostware-sommelier
           tagName: ${{ github.ref_name }}
           releaseName: 'Roostware Sommelier ${{ github.ref_name }}'
           releaseDraft: true
