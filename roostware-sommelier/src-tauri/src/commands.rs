@@ -167,8 +167,12 @@ pub async fn run_code(
 /// Submits code to LeetCode for judging against all its tests, records the verdict in the
 /// user's submission history, and returns it. Recording also settles the problem's draft for
 /// that language (the code is now submitted, not unsubmitted).
+///
+/// Cloudflare sometimes challenges the app's own request, which only a browser can answer; then
+/// the submit is made again from a real browser window (see `leetcode::browser`).
 #[tauri::command]
-pub async fn submit_code(
+pub async fn submit_code<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Db>,
     lc: State<'_, LeetCode>,
     problem_id: i64,
@@ -177,8 +181,13 @@ pub async fn submit_code(
 ) -> leetcode::Result<Submission> {
     let credentials = lc.credentials()?;
     let (slug, _) = db.with(|conn| problems::judging_info(conn, problem_id))?;
-    let (leetcode_id, verdict) =
-        lc.client.submit(&credentials, &slug, problem_id, &lang, &for_leetcode(&code)).await?;
+    let code_for_lc = for_leetcode(&code);
+    let (leetcode_id, verdict) = match lc.client.submit(&credentials, &slug, problem_id, &lang, &code_for_lc).await {
+        Err(LeetCodeError::Blocked(_)) => {
+            leetcode::browser::submit(&app, &lc.client, &credentials, &slug, problem_id, &lang, &code_for_lc).await?
+        }
+        other => other?,
+    };
     // Store the code as the user wrote it, not as it was sent.
     let record = lc_result::parse_submission(&verdict, problem_id, &lang, &code, Some(leetcode_id));
     Ok(db.with(|conn| submissions::record(conn, record))?)

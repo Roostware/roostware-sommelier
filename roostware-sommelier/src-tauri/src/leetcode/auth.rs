@@ -119,7 +119,8 @@ impl CredentialStore for KeyringStore {
     }
 
     fn clear(&self) -> Result<()> {
-        for name in ["session", "csrf", "username"] {
+        // "clearance" was stored by an earlier version; clearing it keeps old installs tidy.
+        for name in ["session", "csrf", "clearance", "username"] {
             match self.entry(name)?.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => {}
                 Err(e) => return Err(credential_error(e)),
@@ -255,7 +256,10 @@ mod tests {
     fn memory_store_round_trips_and_clears() {
         let store = MemoryStore::default();
         assert_eq!(store.load().unwrap(), None);
-        let stored = Stored { credentials: Credentials { session: "s".into(), csrf: "c".into() }, username: "ada".into() };
+        let stored = Stored {
+            credentials: Credentials { session: "s".into(), csrf: "c".into() },
+            username: "ada".into(),
+        };
         store.save(&stored).unwrap();
         assert_eq!(store.load().unwrap(), Some(stored.clone()));
         assert_eq!(AuthStatus::of(store.load().unwrap().as_ref()), AuthStatus { signed_in: true, username: Some("ada".into()) });

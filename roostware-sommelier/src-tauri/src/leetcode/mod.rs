@@ -6,6 +6,7 @@
 //! for one person's own account, one request at a time, driven by a click.
 
 pub mod auth;
+pub mod browser;
 pub mod client;
 mod error;
 pub mod result;

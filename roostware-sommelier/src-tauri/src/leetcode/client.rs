@@ -18,7 +18,7 @@ use super::{auth::Credentials, error::Error, error::Result};
 pub const DEFAULT_BASE: &str = "https://leetcode.com";
 
 /// LeetCode's bot protection is friendlier to browser-looking requests.
-const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+pub(crate) const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 pub struct Client {
@@ -141,11 +141,7 @@ impl Client {
             .headers(self.headers(creds, Some(slug))?)
             .json(&body);
         let started = self.send(request).await?;
-        let id = match &started["submission_id"] {
-            Value::Number(n) => n.to_string(),
-            Value::String(s) if !s.is_empty() => s.clone(),
-            _ => return Err(Error::Unexpected("the submission didn't return an id".into())),
-        };
+        let id = submission_id(&started)?;
         let result = self.wait_for_verdict(creds, slug, &id).await?;
         Ok((id, result))
     }
@@ -158,18 +154,40 @@ impl Client {
                 .get(format!("{}/submissions/detail/{id}/check/", self.base))
                 .headers(self.headers(creds, Some(slug))?);
             let v = self.send(request).await?;
-            // PENDING and STARTED mean "keep waiting"; SUCCESS is a finished verdict (a wrong
-            // answer is still SUCCESS: the *judging* succeeded).
-            match v["state"].as_str() {
-                Some("SUCCESS") => return Ok(v),
-                Some("PENDING" | "STARTED") | None => {}
-                Some(other) => return Err(Error::Unexpected(format!("judging ended in state {other}"))),
+            if judged(&v)? {
+                return Ok(v);
             }
         }
-        Err(Error::Other(
-            "LeetCode is taking too long to judge this. Check leetcode.com for the result.".into(),
-        ))
+        Err(too_slow())
     }
+
+    /// How often to ask for a verdict, and how many times before giving up.
+    pub(crate) fn polling(&self) -> (Duration, u32) {
+        (self.poll_interval, self.max_polls)
+    }
+}
+
+/// LeetCode's id for a submission, from the response to submitting.
+pub(crate) fn submission_id(started: &Value) -> Result<String> {
+    match &started["submission_id"] {
+        Value::Number(n) => Ok(n.to_string()),
+        Value::String(s) if !s.is_empty() => Ok(s.clone()),
+        _ => Err(Error::Unexpected("the submission didn't return an id".into())),
+    }
+}
+
+/// Whether a "check" response is the final verdict. PENDING and STARTED mean "keep waiting";
+/// SUCCESS is a finished verdict (a wrong answer is still SUCCESS: the *judging* succeeded).
+pub(crate) fn judged(check: &Value) -> Result<bool> {
+    match check["state"].as_str() {
+        Some("SUCCESS") => Ok(true),
+        Some("PENDING" | "STARTED") | None => Ok(false),
+        Some(other) => Err(Error::Unexpected(format!("judging ended in state {other}"))),
+    }
+}
+
+pub(crate) fn too_slow() -> Error {
+    Error::Other("LeetCode is taking too long to judge this. Check leetcode.com for the result.".into())
 }
 
 /// Maps an HTTP response to the JSON body or the right [`Error`]. Pure, so it is unit tested
@@ -177,7 +195,10 @@ impl Client {
 pub(crate) fn interpret(status: StatusCode, bot_challenge: bool, body: &str) -> Result<Value> {
     let looks_like_challenge = body.contains("Just a moment") || body.contains("cf-challenge");
     if bot_challenge || (!status.is_success() && looks_like_challenge) {
-        return Err(Error::Blocked);
+        let how = if bot_challenge { "cf-mitigated header" } else { "challenge page" };
+        let snippet = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        let snippet: String = snippet.chars().take(150).collect();
+        return Err(Error::Blocked(format!("HTTP {}, {how}: {snippet}", status.as_u16())));
     }
     let parsed: Option<Value> = serde_json::from_str(body).ok();
     match status {
@@ -215,10 +236,13 @@ mod tests {
 
     #[test]
     fn a_cloudflare_challenge_is_blocked_not_expired() {
-        assert!(matches!(interpret(StatusCode::FORBIDDEN, true, ""), Err(Error::Blocked)));
+        assert!(matches!(interpret(StatusCode::FORBIDDEN, true, ""), Err(Error::Blocked(_))));
         let page = "<html><title>Just a moment...</title></html>";
-        assert!(matches!(interpret(StatusCode::FORBIDDEN, false, page), Err(Error::Blocked)));
-        assert!(matches!(interpret(StatusCode::SERVICE_UNAVAILABLE, false, page), Err(Error::Blocked)));
+        match interpret(StatusCode::FORBIDDEN, false, page) {
+            Err(Error::Blocked(d)) => assert!(d.contains("HTTP 403") && d.contains("Just a moment")),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(interpret(StatusCode::SERVICE_UNAVAILABLE, false, page), Err(Error::Blocked(_))));
     }
 
     #[test]

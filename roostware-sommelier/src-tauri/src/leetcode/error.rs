@@ -14,8 +14,9 @@ pub enum Error {
     SessionExpired,
 
     /// Cloudflare (LeetCode's bot protection) answered instead of LeetCode.
-    #[error("LeetCode's bot protection blocked the request. Try again in a moment.")]
-    Blocked,
+    /// The text says what Cloudflare sent back, so a block can be diagnosed.
+    #[error("LeetCode's bot protection blocked the request. Try again in a moment. ({0})")]
+    Blocked(String),
 
     #[error("LeetCode is limiting how fast you can submit. {0}")]
     RateLimited(String),
@@ -45,7 +46,7 @@ impl Error {
         match self {
             Error::NotSignedIn => "notSignedIn",
             Error::SessionExpired => "sessionExpired",
-            Error::Blocked => "blocked",
+            Error::Blocked(_) => "blocked",
             Error::RateLimited(_) => "rateLimited",
             Error::Cancelled => "cancelled",
             Error::Network(_) => "network",
