@@ -12,6 +12,7 @@
   import { leetcode } from "$lib/leetcode.svelte";
   import ProblemStatement from "$lib/ProblemStatement.svelte";
   import { settings } from "$lib/settings.svelte";
+  import { resetIfSolved } from "$lib/sittingEnd";
   import { closeProblem, solve } from "$lib/solve.svelte";
 
   onMount(() => {
@@ -19,6 +20,12 @@
     // Coming back to the tab: pick up anything that changed since (e.g. new submissions).
     if (solve.problem && !solve.loading) void solve.refresh();
   });
+
+  // Going back to the picker ends this sitting, so a solved problem is reset like on leaving the tab.
+  function chooseAnother() {
+    resetIfSolved();
+    closeProblem();
+  }
 
   let problem = $derived(solve.problem);
   let languages = $derived(problem ? sortLanguages(problem.snippets.map((s) => s.lang)) : []);
@@ -127,7 +134,7 @@
 <svelte:window onpointerdown={onWindowPointerDown} />
 
 <div class="workspace">
-  <button type="button" class="back" onclick={closeProblem}>
+  <button type="button" class="back" onclick={chooseAnother}>
     <svg
       viewBox="0 0 24 24"
       fill="none"

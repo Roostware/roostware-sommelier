@@ -73,9 +73,13 @@ export interface ProblemPhase {
   failedSince: number;
 }
 
-/** Where the problem stands, from its submissions (newest first) and its give-up state. */
-export function phaseOf(submissions: Submission[] | null, giveUpInfo: GiveUpInfo | null): ProblemPhase {
-  const list = submissions ?? [];
+/**
+ * Where the problem stands, from its submissions (newest first) and its give-up state. Submissions
+ * made at or before `since` (epoch ms) are ignored: that's a fresh start, where the problem is
+ * treated as if it had never been solved (see `Thread.freshAfter`).
+ */
+export function phaseOf(submissions: Submission[] | null, giveUpInfo: GiveUpInfo | null, since = 0): ProblemPhase {
+  const list = (submissions ?? []).filter((s) => s.submittedAt > since);
   const latest = list[0] ?? null;
   const acceptedAt = list.findIndex((s) => s.status === "Accepted");
   const accepted = acceptedAt === -1 ? null : list[acceptedAt];
@@ -149,6 +153,12 @@ export interface Thread {
   nextId: number;
   /** A message to bring into view (an analysis asked for twice). */
   focus: number | null;
+  /**
+   * When the problem was last given a fresh start (epoch ms; 0 for never): the coach acts as if
+   * submissions up to then hadn't happened, so a problem solved before is offered hints and
+   * questions again. Saved with the thread, and carried over when a new conversation starts.
+   */
+  freshAfter: number;
 }
 
 /** What's saved about a thread besides its messages. */
@@ -160,6 +170,7 @@ interface SavedState {
   shareCode: boolean;
   shareSubmission: boolean;
   analyses: Record<string, number>;
+  freshAfter: number;
 }
 
 const freshThread = (): Thread => ({
@@ -174,6 +185,7 @@ const freshThread = (): Thread => ({
   analyses: {},
   nextId: 0,
   focus: null,
+  freshAfter: 0,
 });
 
 const EMPTY: Thread = freshThread();
@@ -203,6 +215,7 @@ function restoredState(raw: unknown): SavedState {
     shareCode: typeof s.shareCode === "boolean" ? s.shareCode : fresh.shareCode,
     shareSubmission: typeof s.shareSubmission === "boolean" ? s.shareSubmission : fresh.shareSubmission,
     analyses: numbers(s.analyses),
+    freshAfter: typeof s.freshAfter === "number" && s.freshAfter > 0 ? s.freshAfter : 0,
   };
 }
 
@@ -303,7 +316,9 @@ class CoachSession {
       inputTokens: m.usage?.inputTokens ?? null,
       outputTokens: m.usage?.outputTokens ?? null,
     };
-    saveCoachMessage(problemId, record).catch((e) => console.warn("Couldn't save the coach's message:", e));
+    void this.#afterEnd(problemId).then(() =>
+      saveCoachMessage(problemId, record).catch((e) => console.warn("Couldn't save the coach's message:", e)),
+    );
   }
 
   #saveState(problemId: number, t: Thread) {
@@ -315,8 +330,19 @@ class CoachSession {
       shareCode: t.shareCode,
       shareSubmission: t.shareSubmission,
       analyses: $state.snapshot(t.analyses),
+      freshAfter: t.freshAfter,
     };
-    saveCoachState(problemId, state).catch((e) => console.warn("Couldn't save the conversation's state:", e));
+    void this.#afterEnd(problemId).then(() =>
+      saveCoachState(problemId, state).catch((e) => console.warn("Couldn't save the conversation's state:", e)),
+    );
+  }
+
+  // Ending a conversation is saved asynchronously; whatever is saved for the next one waits for
+  // that, so it can't land first and be ended along with the old one.
+  #ending = new Map<number, Promise<unknown>>();
+
+  #afterEnd(problemId: number): Promise<unknown> {
+    return this.#ending.get(problemId) ?? Promise.resolve();
   }
 
   // ---- The drawer ---------------------------------------------------------------
@@ -339,11 +365,35 @@ class CoachSession {
     this.#aborts.get(problemId)?.abort();
   }
 
-  /** Starts a fresh conversation for a problem. (Tokens already spent stay in the problem's total.) */
-  newConversation(problemId: number) {
+  /**
+   * Starts a fresh conversation for a problem. (Tokens already spent stay in the problem's total.)
+   * With `freshStart`, the problem is also treated as never solved from here on: earlier
+   * submissions stop counting for what the coach offers (they stay in the history).
+   */
+  newConversation(problemId: number, freshStart = false) {
+    const freshAfter = freshStart ? Date.now() : this.thread(problemId).freshAfter;
     this.stop(problemId);
     delete this.#threads[problemId];
-    newCoachThread(problemId).catch((e) => console.warn("Couldn't end the saved conversation:", e));
+    this.#ending.set(
+      problemId,
+      newCoachThread(problemId).catch((e) => console.warn("Couldn't end the saved conversation:", e)),
+    );
+    if (freshAfter > 0) {
+      const t = this.#mutable(problemId);
+      t.freshAfter = freshAfter;
+      this.#saveState(problemId, t);
+    }
+  }
+
+  /**
+   * Analyzes an accepted submission from the history, in a new conversation of its own (the drawer
+   * opens to show it). Does nothing while a reply is being written.
+   */
+  analyzeSubmission(ctx: CoachContext, submission: Submission) {
+    if (this.thread(ctx.problemId).busy) return;
+    this.open = true;
+    this.newConversation(ctx.problemId);
+    return this.ask(ctx, "analyze", { subject: submission });
   }
 
   /** What the user typed: an answer in a guiding-questions session, otherwise a question. */
@@ -416,11 +466,11 @@ class CoachSession {
    * an analysis already made for a submission is found rather than made again. Does nothing when
    * the coach isn't set up (the drawer says what's missing).
    */
-  async ask(ctx: CoachContext, action: CoachAction, options: { message?: string; viaGiveUp?: boolean; again?: boolean } = {}) {
+  async ask(ctx: CoachContext, action: CoachAction, options: { message?: string; viaGiveUp?: boolean; again?: boolean; subject?: Submission } = {}) {
     const id = ctx.problemId;
     const t = this.#mutable(id);
     if (t.busy || !coachSetup.ready) return;
-    const p = phaseOf(ctx.submissions, this.giveUpInfo(id));
+    const p = phaseOf(ctx.submissions, this.giveUpInfo(id), t.freshAfter);
 
     // What's being asked, what to call it, and which submission it's about.
     let level = 0;
@@ -445,7 +495,7 @@ class CoachSession {
         break;
       }
       case "analyze": {
-        subject = p.accepted;
+        subject = options.subject ?? p.accepted;
         if (!subject) return;
         const existing = t.analyses[subject.id];
         if (existing !== undefined && !options.again) {

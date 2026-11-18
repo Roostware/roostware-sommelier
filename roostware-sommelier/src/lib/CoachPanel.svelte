@@ -33,8 +33,8 @@
 
   let history = $derived(leetcode.stateFor(problem.id).history);
   let info = $derived(coach.giveUpInfo(problem.id));
-  let p = $derived(phaseOf(history, info));
   let t = $derived(coach.thread(problem.id));
+  let p = $derived(phaseOf(history, info, t.freshAfter));
   let ctx = () => contextFor(problem, lang, getCode);
 
   // Whether the coach has what it needs (a key, a model, an address, the switch on). When it

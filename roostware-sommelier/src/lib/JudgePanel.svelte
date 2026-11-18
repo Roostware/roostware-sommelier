@@ -4,7 +4,7 @@
   // above them with three tabs: the test cases Run will use (the problem's examples, which can be
   // edited and added to), what the last Run or Submit came to, and the problem's submission history.
   import { tick } from "svelte";
-  import { coach } from "$lib/coach.svelte";
+  import { coach, contextFor } from "$lib/coach.svelte";
   import { COACH_NAME } from "$lib/coachName";
   import type { ProblemDetail, Submission } from "$lib/db";
   import GiveUpButton from "$lib/GiveUpButton.svelte";
@@ -431,6 +431,15 @@
                 {#if expanded === sub.id}
                   <div class="detail">
                     {#if isAccepted(sub.status)}
+                      {#if settings.coachEnabled}
+                        <!-- Starts a new conversation about this submission. -->
+                        <button type="button" class="coach-link" onclick={() => coach.analyzeSubmission(contextFor(problem, lang, getCode), sub)}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" />
+                          </svg>
+                          Analyze with {COACH_NAME}
+                        </button>
+                      {/if}
                       {@render stats(sub)}
                     {:else}
                       {@render failure(sub)}
@@ -1196,6 +1205,11 @@
 
   .detail {
     padding: 0 calc(8 * var(--u)) calc(10 * var(--u));
+  }
+
+  /* The analyze button sits at the left, above the stats, rather than at a header's right edge. */
+  .detail > .coach-link {
+    margin-left: 0;
   }
 
   /* ---- The bar under the editor ---- */

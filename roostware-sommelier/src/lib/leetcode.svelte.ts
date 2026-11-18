@@ -222,6 +222,17 @@ class LeetCodeSession {
     if (inHistory) inHistory.reviewGrade = grade;
   }
 
+  /** The Accepted submission, if the last Run or Submit for a problem was one. */
+  acceptedThisSitting(problemId: number): Submission | null {
+    const outcome = this.stateFor(problemId).outcome;
+    return outcome?.kind === "submit" && outcome.submission.status === "Accepted" ? outcome.submission : null;
+  }
+
+  /** Forgets everything the console panel was showing for a problem (results, cases, tab). */
+  reset(problemId: number) {
+    delete this.#states[problemId];
+  }
+
   /** The celebration for an accepted submission has played. */
   endCelebration(problemId: number) {
     this.#mutable(problemId).celebrating = false;
