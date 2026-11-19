@@ -397,9 +397,10 @@
 
     flex: none;
     display: flex;
+    flex-wrap: wrap; /* in a narrow pane the buttons drop under the language picker */
     align-items: center;
     justify-content: space-between;
-    gap: calc(12 * var(--u));
+    gap: calc(8 * var(--u)) calc(12 * var(--u));
     padding: calc(10 * var(--u)) calc(14 * var(--u));
     border-bottom: 1px solid var(--card-border);
   }
@@ -434,6 +435,7 @@
     font-size: calc(13 * var(--u));
     font-weight: 500;
     color: #c9c2b4;
+    white-space: nowrap;
     cursor: pointer;
     transition:
       border-color 0.2s,
@@ -661,6 +663,21 @@
     font-size: calc(13 * var(--u));
     line-height: calc(20 * var(--u));
     color: #a8a296;
+  }
+
+  /* With the coach open there are three columns, which needs more room than two: stack them sooner. */
+  @media (max-width: 1280px) {
+    .workspace:has(.panes.with-coach) {
+      height: auto;
+    }
+
+    .panes.with-coach {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .panes.with-coach .pane {
+      height: calc(560 * var(--u));
+    }
   }
 
   /* Too narrow for two halves: stack them and let the page scroll. */

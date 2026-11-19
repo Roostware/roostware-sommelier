@@ -631,20 +631,22 @@
   .home {
     display: flex;
     flex-direction: column;
-    height: 100%;
-    min-height: calc(520 * var(--u));
+    /* Fills the window, and grows past it (the page scrolls) once the cards need more room. */
+    min-height: 100%;
   }
 
   .cards {
     flex: 1;
-    min-height: 0;
     margin-top: calc(20 * var(--u));
     display: grid;
     gap: calc(16 * var(--u));
-    grid-template-columns: 3fr 2fr;
-    /* The middle card in the left column is slightly taller than the other two. */
-    /* minmax(0, …) keeps a card's content from stretching its row. */
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    /* The middle card in the left column is slightly taller than the other two. The minimums are
+       what each card's content needs, so a short window scrolls instead of squeezing them. */
+    grid-template-rows:
+      minmax(calc(190 * var(--u)), 1fr)
+      minmax(calc(225 * var(--u)), 1.25fr)
+      minmax(calc(176 * var(--u)), 1fr);
   }
 
   .card-a {
@@ -663,7 +665,7 @@
   }
 
   .section {
-    padding: calc(16 * var(--u)) calc(24 * var(--u));
+    padding: calc(15 * var(--u)) calc(24 * var(--u));
     min-width: 0;
   }
 
@@ -733,7 +735,8 @@
     flex: none;
     display: flex;
     justify-content: flex-end;
-    gap: calc(14 * var(--u));
+    /* Closer together in a narrower window, so the week still fits beside the number. */
+    gap: clamp(calc(4 * var(--u)), calc(1.5vw - 8px), calc(14 * var(--u)));
     margin: 0;
     padding: 0;
     list-style: none;
@@ -973,10 +976,13 @@
     display: flex;
     flex-direction: column;
     gap: calc(4 * var(--u));
+    /* In a window too narrow for the year's weeks to stay legible, the chart scrolls sideways. */
+    overflow-x: auto;
   }
 
   .months,
   .activity-grid {
+    min-width: calc(420 * var(--u));
     display: grid;
     grid-template-columns: repeat(53, minmax(0, 1fr));
     column-gap: var(--cell-gap);
@@ -1203,12 +1209,17 @@
     gap: calc(12 * var(--u));
   }
 
+  /* The chart fills whatever height the card gives it; it's out of the flow so its own
+     proportions can't decide the card's height (which would grow with the window's width). */
   .radar {
+    position: relative;
     flex: 1;
-    min-height: 0;
+    min-height: calc(120 * var(--u));
   }
 
   .radar svg {
+    position: absolute;
+    inset: 0;
     display: block;
     width: 100%;
     height: 100%;
@@ -1317,6 +1328,107 @@
     margin: calc(6 * var(--u)) 0 0;
     font-size: calc(14 * var(--u));
     color: #a8a296;
+  }
+
+  /* ---- Narrower windows ------------------------------------------------------
+     The cards stack into one column and the page scrolls. Each card gets a height of its own,
+     since it no longer shares a grid row with a card that sets it. */
+
+  @media (max-width: 1180px) {
+    .cards {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: none;
+    }
+
+    .card-a,
+    .card-b,
+    .card-c,
+    .card-d {
+      grid-column: 1;
+      grid-row: auto;
+    }
+
+    .card-a {
+      min-height: calc(190 * var(--u));
+    }
+
+    /* The list can't take its row height from the card here (the card is sized by its content),
+       so it and its rows get a size of their own: four rows show, the rest scroll. */
+    .rec-list {
+      flex: none;
+      container-type: normal;
+      height: calc(4 * 45 * var(--u));
+    }
+
+    .rec-item {
+      height: calc(45 * var(--u));
+    }
+
+    .card-c {
+      min-height: calc(190 * var(--u));
+    }
+
+    .radar {
+      min-height: calc(300 * var(--u));
+    }
+  }
+
+  @media (max-width: 760px) {
+    .section {
+      padding-left: calc(16 * var(--u));
+      padding-right: calc(16 * var(--u));
+    }
+
+    /* Problems solved, rating and streak, one under another. */
+    .card-a {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: none;
+    }
+
+    .section-left,
+    .section-right-top,
+    .section-right-bottom {
+      grid-column: 1;
+      grid-row: auto;
+    }
+
+    .section-left {
+      border-right: none;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .rating-body {
+      margin-top: calc(8 * var(--u));
+      min-height: calc(40 * var(--u));
+    }
+
+    .pattern-bars {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* Title, difficulty and the button are what a row needs. */
+    .rec-item {
+      grid-template-columns: minmax(0, 1fr) calc(72 * var(--u)) auto;
+    }
+
+    .rec-tag-cell,
+    .rec-solved {
+      display: none;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .activity-summary {
+      display: none;
+    }
+
+    .rec-item {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .rec-difficulty-cell {
+      display: none;
+    }
   }
 
   /* ---- Load-in animations ----------------------------------------------------

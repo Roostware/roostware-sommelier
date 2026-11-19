@@ -1192,6 +1192,55 @@
     color: #a8a296;
   }
 
+  /* ---- Narrower windows ------------------------------------------------------
+     Columns drop out, least important first, instead of squeezing the name to nothing. The
+     header and the rows share one template, so hiding the same column in both keeps them lined up. */
+  @media (max-width: 1000px) {
+    .list {
+      --columns: minmax(0, 1fr) calc(90 * var(--u)) calc(70 * var(--u)) calc(100 * var(--u));
+    }
+
+    .list-header > :nth-child(5),
+    .row > :nth-child(5) {
+      display: none;
+    }
+  }
+
+  @media (max-width: 680px) {
+    .list {
+      --columns: minmax(0, 1fr) calc(90 * var(--u)) calc(70 * var(--u));
+    }
+
+    .list-header > :nth-child(4),
+    .row > :nth-child(4) {
+      display: none;
+    }
+
+    /* The solved column is now the last one: its tooltip opens leftwards, so it stays in the page. */
+    .tip::after {
+      left: auto;
+      right: calc(-8 * var(--u));
+      transform: translate(0, calc(4 * var(--u)));
+    }
+
+    .tip:hover::after {
+      transform: none;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .list-header,
+    .row {
+      gap: calc(8 * var(--u));
+      padding-left: calc(8 * var(--u));
+      padding-right: calc(8 * var(--u));
+    }
+
+    .list {
+      --columns: minmax(0, 1fr) calc(70 * var(--u)) calc(56 * var(--u));
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .filters,
     .list-header,

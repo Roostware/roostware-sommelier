@@ -144,9 +144,10 @@ fn for_leetcode(code: &str) -> String {
 
 /// Runs code on LeetCode against test cases without submitting it. `input` is one line per
 /// argument, cases one after another; when it's missing or blank the problem's own example
-/// cases are used.
+/// cases are used. Like Submit, it's retried from a browser window if Cloudflare challenges it.
 #[tauri::command]
-pub async fn run_code(
+pub async fn run_code<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Db>,
     lc: State<'_, LeetCode>,
     problem_id: i64,
@@ -160,7 +161,13 @@ pub async fn run_code(
     if input.trim().is_empty() {
         return Err(LeetCodeError::Other("This problem has no example test cases to run.".into()));
     }
-    let verdict = lc.client.run(&credentials, &slug, problem_id, &lang, &for_leetcode(&code), &input).await?;
+    let code = for_leetcode(&code);
+    let verdict = match lc.client.run(&credentials, &slug, problem_id, &lang, &code, &input).await {
+        Err(LeetCodeError::Blocked(_)) => {
+            leetcode::browser::run(&app, &lc.client, &credentials, &slug, problem_id, &lang, &code, &input).await?
+        }
+        other => other?,
+    };
     Ok(lc_result::parse_run(&verdict, &input))
 }
 

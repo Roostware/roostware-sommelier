@@ -430,4 +430,17 @@
       rgba(20, 23, 28, 0) 100%
     );
   }
+
+  /* Less margin around the page in a narrower window, so the content keeps its room. */
+  @media (max-width: 900px) {
+    .dashboard {
+      padding: 28px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .dashboard {
+      padding: 20px;
+    }
+  }
 </style>

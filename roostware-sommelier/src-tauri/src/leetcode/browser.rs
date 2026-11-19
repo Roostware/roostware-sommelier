@@ -1,7 +1,7 @@
-//! Submitting from inside a real browser window, for when Cloudflare won't take the app's own
-//! requests.
+//! Running and submitting from inside a real browser window, for when Cloudflare won't take the
+//! app's own requests.
 //!
-//! Submit sometimes gets a Cloudflare "managed challenge": a page of JavaScript that only a
+//! Run and Submit sometimes get a Cloudflare "managed challenge": a page of JavaScript that only a
 //! browser can answer, which the plain HTTP client in `client` can't. So when that happens the
 //! app falls back to this: a hidden window on leetcode.com (a webview, i.e. a real browser engine)
 //! loads the problem's page, passes Cloudflare's check the way any visitor does, and makes the
@@ -57,20 +57,60 @@ pub async fn submit<R: Runtime>(
     lang: &str,
     code: &str,
 ) -> Result<(String, Value)> {
+    let body = json!({ "lang": lang, "question_id": question_id.to_string(), "typed_code": code });
+    let (window, started) = start(app, client, creds, slug, &format!("/problems/{slug}/submit/"), &body).await?;
+    let id = submission_id(&started)?;
+    let verdict = poll(&window, client, creds, &id).await?;
+    Ok((id, verdict))
+}
+
+/// Runs `code` against `data_input` on LeetCode from the browser window and waits for the
+/// result, like `Client::run`.
+pub async fn run<R: Runtime>(
+    app: &AppHandle<R>,
+    client: &Client,
+    creds: &Credentials,
+    slug: &str,
+    question_id: i64,
+    lang: &str,
+    code: &str,
+    data_input: &str,
+) -> Result<Value> {
+    let body = json!({
+        "lang": lang, "question_id": question_id.to_string(), "typed_code": code, "data_input": data_input,
+    });
+    let (window, started) = start(app, client, creds, slug, &format!("/problems/{slug}/interpret_solution/"), &body).await?;
+    let id = started["interpret_id"]
+        .as_str()
+        .ok_or_else(|| Error::Unexpected("the run didn't return an id".into()))?
+        .to_owned();
+    poll(&window, client, creds, &id).await
+}
+
+/// Opens the problem's page in the browser window and POSTs `body` to `path` from there.
+async fn start<R: Runtime>(
+    app: &AppHandle<R>,
+    client: &Client,
+    creds: &Credentials,
+    slug: &str,
+    path: &str,
+    body: &Value,
+) -> Result<(WebviewWindow<R>, Value)> {
     let site: Url = client.base().parse().map_err(|e| Error::Other(format!("bad LeetCode address: {e}")))?;
     let window = window(app, &site, creds)?;
     open_problem(&window, &site, slug).await?;
+    let started = fetch(&window, "POST", path, Some(body), creds).await?;
+    Ok((window, started))
+}
 
-    let body = json!({ "lang": lang, "question_id": question_id.to_string(), "typed_code": code });
-    let started = fetch(&window, "POST", &format!("/problems/{slug}/submit/"), Some(&body), creds).await?;
-    let id = submission_id(&started)?;
-
+/// Asks for the verdict on `id` until LeetCode has one.
+async fn poll<R: Runtime>(window: &WebviewWindow<R>, client: &Client, creds: &Credentials, id: &str) -> Result<Value> {
     let (interval, max_polls) = client.polling();
     for _ in 0..max_polls {
         tokio::time::sleep(interval).await;
-        let v = fetch(&window, "GET", &format!("/submissions/detail/{id}/check/"), None, creds).await?;
+        let v = fetch(window, "GET", &format!("/submissions/detail/{id}/check/"), None, creds).await?;
         if judged(&v)? {
-            return Ok((id, v));
+            return Ok(v);
         }
     }
     Err(too_slow())

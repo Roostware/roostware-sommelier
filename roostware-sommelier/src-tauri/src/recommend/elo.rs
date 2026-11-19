@@ -5,7 +5,7 @@
 //! only the user's rating moves. Each problem is one *game*, played the first time it's solved:
 //!
 //! * the **score** comes from how the solve went: [`score`] gives 0.2 for Again (3+ failed
-//!   attempts), 0.55 for Hard (1 or 2) and 1.0 for Good (none), a full win as in chess. Grades
+//!   attempts), 0.8 for Hard (1 or 2) and 1.0 for Good (none), a full win as in chess. Grades
 //!   here come only from failed attempts, never from the user's own override, so the rating
 //!   can't be talked up;
 //! * the **change** is `K × (score − expected)`, where expected is the usual Elo expectation, so
@@ -146,7 +146,7 @@ pub fn problem_ratings(problems: &[ProblemInfo]) -> HashMap<i64, f64> {
 pub fn score(grade: Grade) -> f64 {
     match grade {
         Grade::Again => 0.2,
-        Grade::Hard => 0.55,
+        Grade::Hard => 0.8,
         Grade::Good => 1.0,
         // Never produced by failed attempts, and no better than a clean solve.
         Grade::Easy => 1.0,
@@ -307,10 +307,10 @@ mod tests {
         // A user at 1300, K = 24: an Easy-for-them problem (1100) against a Hard-for-them one (1600).
         let at = |problem, grade| game_delta(1300.0, problem, 24.0, score(grade));
         assert!((at(1100.0, Grade::Again) + 13.4).abs() < 0.1, "{}", at(1100.0, Grade::Again));
-        assert!((at(1100.0, Grade::Hard) + 5.0).abs() < 0.1);
+        assert!((at(1100.0, Grade::Hard) - 1.0).abs() < 0.1);
         assert!((at(1100.0, Grade::Good) - 5.8).abs() < 0.1, "a clean solve of an easy problem pays a little");
         assert!((at(1600.0, Grade::Good) - 20.4).abs() < 0.1);
-        assert!((at(1600.0, Grade::Hard) - 9.6).abs() < 0.1);
+        assert!((at(1600.0, Grade::Hard) - 15.6).abs() < 0.1);
         assert!(at(1600.0, Grade::Again) >= 0.0, "struggling through a much harder problem never costs anything");
         // The same result is worth more the harder the problem is for the user.
         assert!(at(1600.0, Grade::Good) > at(1300.0, Grade::Good) && at(1300.0, Grade::Good) > at(1100.0, Grade::Good));

@@ -472,6 +472,18 @@
     color: #6f6a60;
   }
 
+  /* Narrow window: the "when" column goes, so the name keeps its room. */
+  @media (max-width: 640px) {
+    .item {
+      grid-template-columns: minmax(0, 1fr) calc(72 * var(--u));
+      gap: calc(10 * var(--u));
+    }
+
+    .meta {
+      display: none;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .intro,
     .search-box,

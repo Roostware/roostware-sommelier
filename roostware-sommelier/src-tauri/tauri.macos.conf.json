@@ -6,6 +6,8 @@
         "title": "Sommelier",
         "width": 1440,
         "height": 900,
+        "minWidth": 560,
+        "minHeight": 480,
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
